@@ -17,7 +17,8 @@ import { McAgent } from './mc/agent.js'
 import { BLUEPRINTS, housePlan, buildHouse } from './mc/build.js'
 import { upgradeGear, canUpgrade } from './gear.js'
 import { listSchematics, startBuild, runBuild, placeOnGround } from './schemstore.js'
-import { whereIs, storeValuables, tidyInventory, packIntoBundle, memorySummary, extraValuables } from './storage.js'
+import { whereIs, storeValuables, tidyInventory, packIntoBundle, memorySummary, extraValuables, VALUABLE } from './storage.js'
+const BUILDING = /^(cobblestone|stone|cobbled_deepslate|deepslate|w+_planks|w+_log|w+_wood|stone_bricks|bricks|w*sandstone|glass|w+_slab|w+_stairs|smooth_stone|blackstone|andesite|diorite|granite|tuff|mud_bricks|terracotta|w+_terracotta|w+_concrete|w+_wool|quartz_block|iron_ingot|coal|redstone|lapis_lazuli|copper_ingot)$/
 
 const wait = ms => new Promise(r => setTimeout(r, ms))
 const MAX_MSGS = 24           // conversation turns kept before older ones are folded into memory
@@ -92,7 +93,23 @@ const COMMANDS = [
   { name: 'putInChest', description: 'Put an item in the nearest chest.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many (-1 for all)')], act: (b, { item_name, num = -1 }) => skills.putInChest(b, item_name, num) },
   { name: 'takeFromChest', description: 'Take an item from the nearest chest.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many (-1 for all)')], act: (b, { item_name, num = -1 }) => skills.takeFromChest(b, item_name, num) },
   { name: 'viewChest', description: 'View the items in the nearest chest.', act: b => skills.viewChest(b) },
-  { name: 'discard', description: 'Drop an item from the inventory.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many')], act: async (b, { item_name, num = -1 }) => { const s = b.entity.position.clone(); await skills.moveAway(b, 5); await skills.discard(b, item_name, num); await skills.goToPosition(b, s.x, s.y, s.z, 0) } },
+  { name: 'discard', description: 'Drop JUNK from the inventory (dirt, gravel, seeds, rotten flesh...). Useful materials are stored instead, valuables/gear/food are never thrown.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many')],
+    act: async (b, { item_name, num = -1 }, ctx) => {
+      const name = String(item_name || '').toLowerCase().replace(/\s+/g, '_')
+      const have = b.inventory.items().filter(i => i.name === name).reduce((n, i) => n + i.count, 0)
+      if (!have) { skills.log(b, `You have no ${name}.`); return }
+      if (VALUABLE.test(name) || /_(sword|pickaxe|axe|shovel|hoe|helmet|chestplate|leggings|boots)$|^(shield|bow|crossbow|totem_of_undying|elytra|bundle|\w*shulker_box)$/.test(name) || b.registry.foodsByName[name]) {
+        skills.log(b, `Not throwing away ${name}: it's valuable, gear or food. Store it with storeValuables or putInChest instead.`); return
+      }
+      // building materials are worth keeping: store them; drop only if there's really no room and no storage, and keep a stack
+      if (BUILDING.test(name)) {
+        const r = await tidyInventory(b, ctx.cfg, ctx.home)
+        if (b.inventory.emptySlotCount() > 3) { skills.log(b, `Kept the ${name} (useful for building). ${r}`); return }
+        num = Math.max(0, Math.min(num < 0 ? have : num, have - 64))
+        if (!num) { skills.log(b, `Kept the ${name}: keeping at least a stack of building blocks.`); return }
+      }
+      const s = b.entity.position.clone(); await skills.moveAway(b, 5); await skills.discard(b, name, num); await skills.goToPosition(b, s.x, s.y, s.z, 0)
+    } },
   { name: 'collectBlocks', description: 'Collect (mine/chop) the nearest blocks of a type, picking the right tool. E.g. oak_log, stone, coal_ore, iron_ore, sand.', params: [P('type', 'string', 'Block type'), P('num', 'int', 'How many')], timeout: 10, act: (b, { type, num = 1 }) => skills.collectBlock(b, type, num) },
   { name: 'craftRecipe', description: 'Craft a recipe a number of times (NOT the number of items: one oak_planks craft makes 4). Places a crafting table from the inventory if one is needed.', params: [P('recipe_name', 'string', 'Output item'), P('num', 'int', 'Times to craft')], act: (b, { recipe_name, num = 1 }) => skills.craftRecipe(b, recipe_name, num) },
   { name: 'smeltItem', description: 'Smelt an item in a furnace a number of times (uses a nearby furnace or places one from the inventory; uses coal/charcoal/wood as fuel).', params: [P('item_name', 'string', 'Input item, e.g. raw_iron, beef'), P('num', 'int', 'Times to smelt')], timeout: 5, act: (b, { item_name, num = 1 }) => skills.smeltItem(b, item_name, num) },
@@ -185,6 +202,7 @@ Talking: if a player talks to you, answer with the chat command, briefly and cas
 People: use remember for things players tell you that matter later (their name, their base, what they want from you, promises). Respect what they told you before.
 Gifts: when a player gives you items, thank them and use the items (wear better armor, hold better tools, eat good food).
 - Storage blocks hold 9 items: 1 diamond_block = 9 diamonds, 1 iron_block = 9 iron_ingot, 1 gold_block = 9 gold_ingot. upgradeGear converts them and crafts the best tools and armor for you.
+- Never throw away useful materials (cobblestone, planks, logs, ingots...): store them in a chest. Only drop real junk.
 - Storage: keep valuables safe in your ender chest (survives death) or at base, not in your pockets while exploring. Keep the inventory tidy (tidyInventory), use shulker boxes and bundles if you have them, and use whereIs instead of guessing where things are.
 - Never put diamonds, iron, storage blocks or good gear into a chest while you could still make better tools or armor with them. Always wear the best armor and hold the best weapon you have.
 Dropped items: if items are lying near you (shown in your status), pick them up with pickupItems, especially your own things after dying.` },
