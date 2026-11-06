@@ -13,6 +13,7 @@ import { fightPlayer, watchAttackers } from './combat.js'
 import { watchGifts, watchApproach } from './social.js'
 import { upgradeGear, canUpgrade, VALUABLE } from './gear.js'
 import { attachStorageMemory, memorySummary, extraValuables } from './storage.js'
+import { watchLoops } from './antiloop.js'
 import * as skills from './mc/skills.js'
 
 const GREET = ['hey {p}, need something?', "yo {p}, what's up?", 'hi {p}! need anything?', 'oh hey {p}']
@@ -121,6 +122,13 @@ export function start(id) {
 function attachWatchers(b, st, id) {
   st.watching = true
   try { attachStorageMemory(b, () => cfgOf(id)) } catch (e) { log(st, 'event', 'storage memory unavailable: ' + e.message) } // remember every container it opens
+  try {
+    watchLoops(b, st, spot => { // stuck placing/breaking the same block
+      log(st, 'event', `stuck placing/breaking the same block at ${spot}: walking only (no pillaring/digging) for 2 minutes`)
+      st.busy = false
+      if (st.ai?.agent) { st.ai.agent.requestInterrupt(); inbox(st, `You got stuck placing and breaking the same block at ${spot}, so that path doesn't work. For 2 minutes you can only walk (no pillaring or digging): pick a different route or a different target.`) }
+    })
+  } catch (e) { log(st, 'event', 'loop watch unavailable: ' + e.message) }
   b.once('end', () => { st.watching = false })
   const cfgNow = () => cfgOf(id)
   watchAttackers(b, st, () => cfgNow() && eff(cfgNow()), name => {
