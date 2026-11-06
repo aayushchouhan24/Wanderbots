@@ -8,7 +8,18 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 
 - **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
 - **Any version.** Each bot pings its server and joins with the matching version. Versions 1.8.8 to 26.1 connect directly. Newer servers (26.2, 26.3, …) go through a built-in [ViaProxy](https://github.com/ViaVersion/ViaProxy), started automatically only when needed.
-- **Modes per bot.** Roam, stay at a place, follow a player, guard a place (fights mobs there), or idle (AFK).
+- **Modes per bot.**
+  - **Roam:** wanders freely.
+  - **Stay:** hangs around a place, a spot or exact x y z.
+  - **Follow:** follows a player. If combat is set to fight, it also protects them from mobs.
+  - **Guard:** stays at a spot and fights mobs there.
+  - **Farm:** harvests and replants wheat, carrots, potatoes and beetroot around a place.
+  - **Survival:** plays the early game (see below).
+  - **Idle:** stands still (AFK).
+- **Survival mode.** The bot chops trees and crafts planks, sticks and a crafting table. It makes a wooden pickaxe, then mines stone for a stone pickaxe, sword and axe. It places a chest and builds a 5×5 hut with a door and roof at its base, adds a torch if it finds coal, stores loot in the chest and hunts animals when hungry. It works step by step from its inventory, so it carries on after a restart. In this mode it digs and places blocks, and it never digs inside its own base.
+- **Per-bot settings.** Every behaviour setting can be changed for one bot only in its Settings tab. Other bots keep the defaults.
+- **On-join commands and auto-message.** Commands to run after joining, such as `/login password` for login plugins, and a message to repeat every N minutes.
+- **Lifetime stats.** Time online, joins, distance walked, kills, deaths, items picked up, blocks mined and placed, crops harvested and items crafted.
 - **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak and swim up in water. They also:
   - eat when hungry
   - fight or run from hostile mobs, depending on the setting
@@ -16,7 +27,7 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
   - pick up dropped items
   - sleep in a nearby bed at night
 
-  They never break or place blocks.
+  Outside Farm and Survival modes they never break or place blocks.
 - **Chat.** Bots reply when someone says their name and can greet players who join. Players listed as owners can command them in game chat (see below). Each bot keeps a log of chat and events in the panel.
 - **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
 - **Buttons for all bots.** Roam, idle, rejoin, pause, resume, send all to a place, or say something as every bot.
@@ -75,6 +86,7 @@ src/
   bots.js      bot lifecycle per server: connect, reconnect, places, stats
   brain.js     modes and "real player" behaviour, runs about once a second
   chat.js      chat log, replies, greetings, owner commands
+  survival.js  survival play: gather, craft, store, build a base
   fixes.js     protocol fixes (tick_end)
   viaproxy.js  starts ViaProxy for servers newer than 26.1
   web.js       HTTP server and JSON API
@@ -96,7 +108,10 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/bots`                  | `{ name, address, version }` (address like `play.x.net:25565`) |
 | `DELETE` | `/api/bots/:id`              |                         |
 | `POST`   | `/api/bots/:id/edit`         | `{ name, address, version }` (address like `play.x.net:25565`) |
-| `POST`   | `/api/bots/:id/mode`         | `{ mode, place?, player?, here? }` |
+| `POST`   | `/api/bots/:id/mode`         | `{ mode, place?, player?, here?, xyz? }` |
+| `POST`   | `/api/bots/:id/settings`     | `{ key: value }`, `{ key: null }` for the default, `{ reset: true }` |
+| `POST`   | `/api/bots/:id/extras`       | `{ onJoin, autoMsg: { text, mins } }` |
+| `POST`   | `/api/bots/:id/inv`          | `{ action: hold | drop | dropall, slot }` |
 | `POST`   | `/api/bots/:id/chat`         | `{ text }`              |
 | `POST`   | `/api/bots/:id/pause`        |                         |
 | `POST`   | `/api/bots/:id/resume`       |                         |

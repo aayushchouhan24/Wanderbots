@@ -8,6 +8,7 @@ export const DEFAULTS = {
   combat: 'flee',     // hostile mobs: 'flee' | 'fight' | 'ignore'  (guards always fight)
   guardR: 12,         // how far a guard looks for mobs
   roam: 15, homeR: 6, // wander radius when roaming / around a place
+  farmR: 10,          // how far a farmer looks for crops around its place
   lookPlayers: true, eat: true, gear: true, pickup: true, sleep: true, fidget: true, sprint: false,
   replies: true,      // answer when someone says the bot's name
   greet: false,       // say hi when players join
@@ -16,11 +17,14 @@ export const DEFAULTS = {
 }
 
 export const S = {
-  bots: [],    // [{ id, name, host, port, version, mode, at?, spot?, follow?, paused? }]  at = place id
+  bots: [],    // [{ id, name, host, port, version, mode, at?, spot?, follow?, paused?, set?, onJoin?, autoMsg?, stats? }]  at = place id
   places: [],  // [{ id, name, server: 'host:port', x, y, z }]
   set: { ...DEFAULTS },
   keyHash: '',
 }
+
+// a bot's effective settings: shared defaults, overridden by its own (cfg.set)
+export const eff = cfg => ({ ...S.set, ...(cfg?.set || {}) })
 
 export const newId = () => crypto.randomBytes(4).toString('hex')
 export const serverKey = (host, port) => `${host}:${port}`
@@ -40,6 +44,7 @@ function apply(d) {
     id: b.id || newId(), name: b.name, host: b.host || d.host || 'localhost', port: b.port || d.port || 25565,
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
     spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
+    set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats,
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'

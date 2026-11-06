@@ -1,9 +1,9 @@
 // Control panel: serves public/index.html and a small JSON API under /api.
 import http from 'node:http'
 import fs from 'node:fs'
-import { S, DEFAULTS, save, newId, serverKey } from './store.js'
+import { S, DEFAULTS, save, newId, serverKey, eff } from './store.js'
 import * as auth from './auth.js'
-import { start, stop, restart, live, stats, placeOf, setMode, chat } from './bots.js'
+import { start, stop, restart, live, stats, placeOf, setMode, chat, invAction } from './bots.js'
 import { MODES } from './brain.js'
 import { SUPPORTED } from './version.js'
 
@@ -24,14 +24,19 @@ function clean(k, v) {
 }
 
 // turn a mode request from the panel into a bot patch; returns error text or the patch
-function modePatch(cfg, st, { mode, place, player, here }) {
+function modePatch(cfg, st, { mode, place, player, here, xyz }) {
   if (!MODES.includes(mode)) return 'unknown mode'
   if (mode === 'follow') {
     const name = String(player || '').trim()
     if (!validName(name)) return 'pick a player to follow'
     return { mode, follow: name }
   }
-  if (mode === 'stay' || mode === 'guard') {
+  if (['stay', 'guard', 'farm', 'survive'].includes(mode)) {
+    if (xyz) { // walk to exact coordinates
+      const [x, y, z] = String(xyz).trim().split(/[\s,]+/).map(Number)
+      if (![x, y, z].every(Number.isFinite) || [x, y, z].some(n => Math.abs(n) > 3e7)) return 'coordinates must be like: 100 64 -20'
+      return { mode, spot: { x: Math.round(x), y: Math.round(y), z: Math.round(z) } }
+    }
     if (place) {
       const p = placeOf(place); if (!p) return 'no place'
       if (p.server !== serverKey(cfg.host, cfg.port)) return 'that place is on another server'
@@ -147,6 +152,31 @@ async function handle(q, body, send) {
       if (!msg) return send(400, { error: 'empty message' })
       return chat(id, msg) ? send(200, {}) : send(400, { error: 'bot is not in the world' })
     }
+    if (act === 'settings') { // per-bot overrides: { key: value } sets, { key: null } back to shared, { reset: true } clears all
+      const before = JSON.stringify(eff(cfg))
+      if (body.reset) delete cfg.set
+      else for (const k in DEFAULTS) if (k in body) {
+        cfg.set ||= {}
+        const v = body[k] === null ? null : clean(k, body[k])
+        if (v === null || v === S.set[k]) delete cfg.set[k]; else cfg.set[k] = v
+      }
+      if (cfg.set && !Object.keys(cfg.set).length) delete cfg.set
+      save()
+      if (JSON.parse(before).view !== eff(cfg).view) restart(id); else st?.moves?.()
+      return send(200, {})
+    }
+    if (act === 'extras') { // on-join commands and timed auto-message
+      if ('onJoin' in body) {
+        const t = String(body.onJoin || '').split('\n').map(l => l.trim()).filter(Boolean).slice(0, 5).map(l => l.slice(0, 250)).join('\n')
+        if (t) cfg.onJoin = t; else delete cfg.onJoin
+      }
+      if ('autoMsg' in body) {
+        const text = String(body.autoMsg?.text || '').trim().slice(0, 250), mins = Math.max(1, Math.min(1440, Math.round(+body.autoMsg?.mins || 0)))
+        if (text && +body.autoMsg?.mins) cfg.autoMsg = { text, mins }; else delete cfg.autoMsg
+      }
+      save(); return send(200, { note: 'applies on next join' })
+    }
+    if (act === 'inv') { const err = await invAction(id, body.action, body.slot); return err ? send(400, { error: err }) : send(200, {}) }
     if (act === 'pause') { cfg.paused = true; save(); stop(id); return send(200, {}) }
     if (act === 'resume') { delete cfg.paused; save(); start(id); return send(200, {}) }
     if (act === 'restart') { delete cfg.paused; save(); restart(id); return send(200, {}) }

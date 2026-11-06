@@ -1,7 +1,7 @@
 // Bot lifecycle: connect, reconnect, modes, stats. Each bot has its own server.
 import mineflayer from 'mineflayer'
 import pf from 'mineflayer-pathfinder'
-import { S, save, serverKey } from './store.js'
+import { S, save, serverKey, eff } from './store.js'
 import { detect, text, servers } from './version.js'
 import { think, rnd, homeOf } from './brain.js'
 import { attachChat, log, say } from './chat.js'
@@ -29,6 +29,8 @@ export function start(id) {
   const c0 = cfgOf(id)
   if (live.has(id) || !c0 || c0.paused) return
   const st = { task: 'connecting', err: '', joined: 0, log: [] }
+  // lifetime stats live in the bot's saved config; saved at most once a minute
+  st.count = (k, n = 1) => { const c = cfgOf(id); if (!c) return; c.stats ||= {}; c.stats[k] = (c.stats[k] || 0) + n; dirty = true }
   live.set(id, st)
 
   const run = async () => {
@@ -52,7 +54,7 @@ export function start(id) {
       conn = { host: via.VIA.host, port: via.VIA.port, fakeHost: via.route(cfg.host, cfg.port, srv.target) }
       st.via = true
     }
-    const b = mineflayer.createBot({ ...conn, username: cfg.name, version, auth: 'offline', viewDistance: S.set.view, hideErrors: true })
+    const b = mineflayer.createBot({ ...conn, username: cfg.name, version, auth: 'offline', viewDistance: eff(cfg).view, hideErrors: true })
     st.bot = b; st.task = 'joining'; st.busy = false
     tickEnd(b, version)
     b.loadPlugin(pathfinder)
@@ -60,24 +62,32 @@ export function start(id) {
     let brain
 
     b.once('spawn', () => {
-      st.joined = Date.now(); st.err = ''
+      st.joined = Date.now(); st.err = ''; st.count('joins')
+      // on-join commands, e.g. "/login mypassword" on AuthMe servers (one per line)
+      const lines = String(cfgOf(id)?.onJoin || '').split('\n').map(l => l.trim()).filter(Boolean)
+      lines.forEach((l, i) => setTimeout(() => { if (st.bot === b) { b.chat(l); log(st, 'me', l.startsWith('/') ? l.split(' ')[0] + ' …' : l) } }, 1500 + i * 2500))
+      // timed auto-message
+      const am = cfgOf(id)?.autoMsg
+      if (am?.text && am.mins >= 1) st.autoTimer = setInterval(() => { st.count('msgs'); say(b, st, am.text) }, am.mins * 60e3)
       log(st, 'event', `joined ${cfg.host}${st.via ? ' (via ViaProxy)' : ''} as ${version}`)
       st.moves = () => {
         const m = new Movements(b)
-        m.canDig = false; m.allow1by1towers = false; m.allowSprinting = S.set.sprint // never breaks or builds
+        m.canDig = false; m.allow1by1towers = false; m.allowSprinting = eff(cfgOf(id)).sprint // never breaks or builds
         b.pathfinder.setMovements(m)
       }
       st.moves()
       const loop = () => { const c = cfgOf(id); if (c) think(b, st, c).catch(() => { st.busy = false }); brain = setTimeout(loop, rnd(600, 1500)) }
       loop()
     })
-    b.on('death', () => { b.pathfinder?.stop(); st.busy = false })
+    b.on('death', () => { b.pathfinder?.stop(); st.busy = false; st.count('deaths') })
+    b.on('entityDead', en => { if (en.id === st.target) st.count('kills') })
+    b.on('playerCollect', (who, item) => { if (who === b.entity) st.count('picked') })
     b.on('wake', () => { st.task = 'woke up' })
     b.on('kicked', r => { st.err = 'kicked: ' + text(r).slice(0, 200); log(st, 'event', st.err); console.log(`[${cfg.name}@${cfg.host}] kicked:`, text(r)) })
     b.on('error', e => { st.err = e.message })
     b.on('end', () => {
-      clearTimeout(brain); st.bot = null; st.joined = 0; st.task = 'reconnecting'; st.moves = null
-      if (!st.stop) { log(st, 'event', 'disconnected, retrying'); st.timer = setTimeout(run, Math.max(5, S.set.reconnect) * 1000) }
+      clearTimeout(brain); clearInterval(st.autoTimer); if (st.joined) st.count('online', Math.round((Date.now() - st.joined) / 1000)); st.bot = null; st.joined = 0; st.task = 'reconnecting'; st.moves = null
+      if (!st.stop) { log(st, 'event', 'disconnected, retrying'); st.timer = setTimeout(run, Math.max(5, eff(cfgOf(id) || cfg).reconnect) * 1000) }
     })
   }
   run()
@@ -89,6 +99,20 @@ export function stop(id) {
 }
 
 export const restart = id => { stop(id); start(id) }
+
+let dirty = false
+setInterval(() => { if (dirty) { dirty = false; save() } }, 60e3).unref()
+
+// inventory actions from the panel: hold / drop one stack / drop everything
+export async function invAction(id, action, slot) {
+  const b = live.get(id)?.bot; if (!b?.entity) return 'bot is not in the world'
+  const item = b.inventory.slots[+slot]
+  if (action === 'dropall') { for (const i of b.inventory.items()) await b.tossStack(i).catch(() => {}); return }
+  if (!item) return 'that slot is empty'
+  if (action === 'hold') return b.equip(item, 'hand').then(() => {}, e => e.message)
+  if (action === 'drop') return b.tossStack(item).then(() => {}, e => e.message)
+  return 'unknown action'
+}
 export function chat(id, msg) { const st = live.get(id); if (!st?.bot?.entity) return false; say(st.bot, st, msg); return true }
 
 export function stats() {
@@ -107,7 +131,9 @@ export function stats() {
         day: b?.time ? (b.time.isDay ? 'day' : 'night') : null,
         pos: e ? [e.position.x, e.position.y, e.position.z].map(Math.round) : null,
         players, nearby: b ? players.filter(n => b.players[n]?.entity && b.players[n].entity.position.distanceTo(e.position) < 32) : [],
-        inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count })) : [],
+        inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count, s: i.slot })) : [],
+        stats: { ...(c.stats || {}), online: (c.stats?.online || 0) + (st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0) },
+        own: c.set || {}, onJoin: c.onJoin || '', autoMsg: c.autoMsg || null,
         hand: b?.heldItem?.displayName,
         log: st.log || [],
       }

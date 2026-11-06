@@ -15,10 +15,18 @@ let proc = null, ready = null
 
 export const available = () => fs.existsSync(JAR)
 
-// resolves when ViaProxy is listening; starts it on first call
-export function ensure() {
+const portOpen = () => waitPort(0).then(() => true, () => false)
+
+// resolves when our ViaProxy is listening; starts it on first call and restarts it if it died
+export async function ensure() {
+  if (ready) {
+    const ok = await ready.then(() => true, () => false)
+    if (ok && proc && await portOpen()) return
+    proc?.kill(); proc = null; ready = null // dead or hung: start a fresh one
+  }
+  if (!available()) throw new Error('ViaProxy.jar not found in ./viaproxy (see README)')
+  if (!ready && await portOpen()) throw new Error(`port ${VIA.port} is already used by another program (another Wanderbots running?)`)
   if (ready) return ready
-  if (!available()) return Promise.reject(new Error('ViaProxy.jar not found in ./viaproxy (see README)'))
   ready = new Promise((resolve, reject) => {
     proc = spawn('java', ['-Xmx256m', '-jar', JAR, 'cli', '--bind-address', `${VIA.host}:${VIA.port}`,
       '--wildcard-domain-handling', 'INTERNAL', '--auth-method', 'NONE', '--log-ips', 'false'], { cwd: DIR, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -29,6 +37,7 @@ export function ensure() {
     proc.stdout.on('data', d => {
       const s = d.toString().replace(/\x1b\[[0-9;]*m/g, '')
       if (/ERROR|SERVER DISCONNECT/.test(s)) process.stdout.write('[viaproxy] ' + s)
+      if (/Failed to bind|Address already in use|Exception in thread "main"/.test(s)) { clearTimeout(timer); proc?.kill(); fail(new Error('ViaProxy failed to start: ' + s.trim().slice(0, 120))) }
       if (s.includes('ViaProxy started successfully')) waitPort(40).then(() => { clearTimeout(timer); console.log('[viaproxy] ready on', VIA.port); resolve() }, fail)
     })
     proc.stderr.on('data', d => process.stderr.write('[viaproxy] ' + d))

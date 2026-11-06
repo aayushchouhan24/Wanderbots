@@ -1,5 +1,5 @@
 // Chat: per-bot log, rate-limited sending, replies, greetings and owner commands.
-import { S, save, newId } from './store.js'
+import { S, save, newId, eff } from './store.js'
 import { rnd } from './brain.js'
 
 const pick = a => a[Math.floor(Math.random() * a.length)]
@@ -22,7 +22,7 @@ export function say(b, st, text) {
 }
 const later = (b, st, text) => setTimeout(() => say(b, st, text), rnd(1200, 3500)) // human reply delay
 
-const owners = () => S.set.owners.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+const owners = cfg => eff(cfg).owners.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
 
 export function attachChat(b, st, cfg, { setMode }) {
   b.on('messagestr', (msg, pos) => { if (pos !== 'game_info' && msg.trim()) log(st, pos === 'chat' ? 'chat' : 'server', msg) })
@@ -31,7 +31,7 @@ export function attachChat(b, st, cfg, { setMode }) {
     if (!st.joined || Date.now() - st.joined < 10e3 || p.username === b.username) return
     log(st, 'event', p.username + ' joined')
     st.greeted ||= {}
-    if (S.set.greet && chance(0.6) && Date.now() - (st.greeted[p.username] || 0) > 10 * 60e3) {
+    if (eff(cfg).greet && chance(0.6) && Date.now() - (st.greeted[p.username] || 0) > 10 * 60e3) {
       st.greeted[p.username] = Date.now()
       setTimeout(() => say(b, st, pick(GREET).replace('{p}', p.username)), rnd(2500, 7000))
     }
@@ -41,8 +41,8 @@ export function attachChat(b, st, cfg, { setMode }) {
   b.on('chat', (user, message) => {
     if (user === b.username) return
     const msg = message.trim(), lower = msg.toLowerCase()
-    if (msg.startsWith('!') && owners().includes(user.toLowerCase())) return command(b, st, cfg, user, msg.slice(1).split(/\s+/), setMode)
-    if (S.set.replies && lower.includes(b.username.toLowerCase()) && Date.now() - (st.replied || 0) > 8000) {
+    if (msg.startsWith('!') && owners(cfg).includes(user.toLowerCase())) return command(b, st, cfg, user, msg.slice(1).split(/\s+/), setMode)
+    if (eff(cfg).replies && lower.includes(b.username.toLowerCase()) && Date.now() - (st.replied || 0) > 8000) {
       st.replied = Date.now(); later(b, st, pick(REPLY))
     }
   })
