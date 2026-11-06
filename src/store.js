@@ -1,29 +1,38 @@
-// Persistent state: bots, places, server, settings and the login-key hash.
+// Persistent state: bots, places, settings and the login-key hash.
 // Uses MongoDB when MONGO_URI is set, otherwise a local JSON file.
 import fs from 'node:fs'
+import crypto from 'node:crypto'
 
-// default bot behaviour; every field is editable from the panel
-export const DEFAULTS = { version: 'auto', roam: 15, homeR: 6, lookPlayers: true, eat: true, fidget: true, sprint: false, reconnect: 10, view: 'tiny' }
+// default bot behaviour (shared by all bots); editable from the panel
+export const DEFAULTS = { roam: 15, homeR: 6, lookPlayers: true, eat: true, fidget: true, sprint: false, reconnect: 10, view: 'tiny' }
 
 export const S = {
-  host: process.env.HOST || 'localhost',
-  port: +(process.env.PORT_MC || 25565),
-  bots: [],      // [{ name, at? }]
-  places: {},    // { name: { x, y, z } }
+  bots: [],    // [{ id, name, host, port, version, at? }]   at = place id
+  places: [],  // [{ id, name, server: 'host:port', x, y, z }]
   set: { ...DEFAULTS },
   keyHash: '',
 }
 
-const FILE = process.env.DATA || './data.json'
+export const newId = () => crypto.randomBytes(4).toString('hex')
+export const serverKey = (host, port) => `${host}:${port}`
+
+const FILE = './data.json'
 let col
 
 function apply(d) {
   if (!d) return
-  Object.assign(S, {
-    host: d.host ?? S.host, port: d.port ?? S.port, bots: d.bots || [], keyHash: d.keyHash || '',
-    places: Array.isArray(d.places) ? Object.fromEntries(d.places) : d.places || {},
-    set: { ...DEFAULTS, ...d.set },
-  })
+  // migrate the old single-server format: global host/port, places as object/entries
+  const oldServer = d.host ? serverKey(d.host, d.port || 25565) : ''
+  let places = d.places || []
+  if (!Array.isArray(places) || (places.length && Array.isArray(places[0]))) {
+    places = (Array.isArray(places) ? places : Object.entries(places)).map(([name, p]) => ({ id: newId(), name, server: oldServer, ...p }))
+  }
+  const bots = (d.bots || []).map(b => ({
+    id: b.id || newId(), name: b.name, host: b.host || d.host || 'localhost', port: b.port || d.port || 25565,
+    version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
+  }))
+  const { version, ...set } = d.set || {}
+  Object.assign(S, { bots, places, keyHash: d.keyHash || '', set: { ...DEFAULTS, ...set } })
 }
 
 export async function loadStore() {
@@ -38,12 +47,10 @@ export async function loadStore() {
     try { apply(JSON.parse(fs.readFileSync(FILE))) } catch {}
     console.log('[store] file', FILE)
   }
-  if (!S.bots.length && process.env.NAME) S.bots = [{ name: process.env.NAME }]
 }
 
 export function save() {
-  // places stored as entries so names with "." or "$" are safe in MongoDB
-  const d = { host: S.host, port: S.port, bots: S.bots, places: Object.entries(S.places), set: S.set, keyHash: S.keyHash }
+  const d = { bots: S.bots, places: S.places, set: S.set, keyHash: S.keyHash }
   if (col) col.replaceOne({ _id: 'main' }, d, { upsert: true }).catch(e => console.log('[store] save failed:', e.message))
   else fs.writeFileSync(FILE, JSON.stringify(d, null, 1))
 }

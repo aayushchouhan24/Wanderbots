@@ -1,17 +1,17 @@
 # Wanderbots
 
-Minecraft bots that join a server and hang out like real players: they walk around, look at people nearby, jump, sneak, eat when hungry and go to the places you send them. You manage everything from a small web panel that needs a login key.
+Minecraft bots that join any servers and hang out like real players: they walk around, look at people nearby, jump, sneak, eat when hungry and go to the places you send them. You manage everything from a small web panel that needs a login key.
 
 Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses little memory: about 85 MB with no bots, plus some for each bot.
 
 ## Features
 
-- **Any username.** Add as many bots as you want and rename them from the panel.
-- **Automatic version.** It pings the server and joins with the matching Minecraft version (1.8.8 to 26.1). You can also pick a version yourself.
+- **Any username, any server.** Add as many bots as you want. Each one has its own username, server address, port and version, all set in the panel.
+- **Automatic version.** Each bot pings its server and joins with the matching Minecraft version (1.8.8 to 26.1). You can also pick a version per bot.
 - **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak, swing and eat. They never break or place blocks.
-- **Places.** Save spots like `farm` or `base`, by coordinates or from where a bot stands, and send bots there. A bot stays near its place and walks back after dying.
+- **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
 - **Live stats.** Health, food, position, world, ping, uptime and players online.
-- **Everything editable in the panel.** Server, version, roam radius, stay radius, view distance, reconnect delay and behaviour toggles.
+- **Everything editable in the panel.** Per bot: username, server, port and version. For all bots: roam radius, stay radius, view distance, reconnect delay and behaviour toggles.
 - **Login key.** The key is stored only as a hash. Sessions last 7 days. Too many wrong tries locks login for 15 minutes.
 - **Storage.** MongoDB, or a local `data.json` file if MongoDB isn't set.
 
@@ -34,17 +34,13 @@ Open `http://localhost:3000`. If you left `PASS` empty, the login key is printed
 
 ## Configuration (`.env`)
 
-| Variable    | What it does                                                    | Default       |
-|-------------|-----------------------------------------------------------------|---------------|
-| `HOST`      | Minecraft server address                                        | `localhost`   |
-| `PORT_MC`   | Minecraft server port                                           | `25565`       |
-| `NAME`      | First bot to create if none are saved yet                       | –             |
-| `MONGO_URI` | MongoDB connection string. Empty means a local `data.json` file | –             |
-| `PASS`      | Login key used on the first start only                          | random        |
-| `PORT`      | Web panel port                                                  | `3000`        |
-| `DATA`      | Path of the JSON file when MongoDB isn't used                   | `./data.json` |
+Only three settings live in `.env`. Everything else (bots, servers, versions, places, behaviour) is set in the panel and saved in the database.
 
-Once the app is running, the panel overrides `HOST`, `PORT_MC` and `PASS`. Those changes are saved in the database.
+| Variable    | What it does                                                                   | Default  |
+|-------------|--------------------------------------------------------------------------------|----------|
+| `MONGO_URI` | MongoDB connection string. Empty means a local `data.json` file              | –        |
+| `PASS`      | Login key used on the first start only. Change it later in the panel          | random   |
+| `PORT`      | Web panel port                                                                 | `3000`   |
 
 ## Docker
 
@@ -63,7 +59,7 @@ src/
   store.js     saved state (MongoDB or data.json) and default settings
   auth.js      login key, sessions, lockout
   version.js   server ping and version detection
-  bots.js      bot lifecycle: connect, reconnect, places, stats
+  bots.js      bot lifecycle per server: connect, reconnect, places, stats
   brain.js     "real player" behaviour, runs about once a second
   web.js       HTTP server and JSON API
 public/
@@ -80,17 +76,16 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/logout`                |                         |
 | `POST`   | `/api/key`                   | `{ key }` (8+ chars)    |
 | `GET`    | `/api/state`                 |                         |
-| `POST`   | `/api/server`                | `{ host, port }`        |
-| `POST`   | `/api/settings`              | any setting fields      |
-| `POST`   | `/api/bots`                  | `{ name }`              |
-| `DELETE` | `/api/bots/:name`            |                         |
-| `POST`   | `/api/bots/:name/rename`     | `{ name }`              |
-| `POST`   | `/api/bots/:name/send`       | `{ place }`             |
-| `POST`   | `/api/bots/:name/roam`       |                         |
-| `POST`   | `/api/bots/:name/restart`    |                         |
-| `POST`   | `/api/bots/:name/here`       | `{ name }` (save spot)  |
-| `POST`   | `/api/places`                | `{ name, x, y, z }`     |
-| `DELETE` | `/api/places/:name`          |                         |
+| `POST`   | `/api/settings`              | shared behaviour fields |
+| `POST`   | `/api/bots`                  | `{ name, host, port, version }` |
+| `DELETE` | `/api/bots/:id`              |                         |
+| `POST`   | `/api/bots/:id/edit`         | `{ name, host, port, version }` |
+| `POST`   | `/api/bots/:id/send`       | `{ place }` (place id)  |
+| `POST`   | `/api/bots/:id/roam`       |                         |
+| `POST`   | `/api/bots/:id/restart`    |                         |
+| `POST`   | `/api/bots/:id/here`       | `{ name }` (save spot)  |
+| `POST`   | `/api/places`                | `{ name, server, x, y, z }` |
+| `DELETE` | `/api/places/:id`          |                         |
 
 ## Known limits
 

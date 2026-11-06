@@ -1,22 +1,38 @@
 // Control panel: serves public/index.html and a small JSON API under /api.
 import http from 'node:http'
 import fs from 'node:fs'
-import { S, DEFAULTS, save } from './store.js'
+import { S, DEFAULTS, save, newId, serverKey } from './store.js'
 import * as auth from './auth.js'
-import { start, stop, restartAll, stats, live } from './bots.js'
-import { SUPPORTED, server } from './version.js'
+import { start, stop, restart, live, stats, placeOf } from './bots.js'
+import { SUPPORTED } from './version.js'
 
 const page = fs.readFileSync(new URL('../public/index.html', import.meta.url))
 const validName = n => /^[A-Za-z0-9_]{3,16}$/.test(n)
-const place = n => String(n || '').slice(0, 32)
+const validHost = h => /^[A-Za-z0-9.-]{1,253}$/.test(h)
+const validPort = p => Number.isInteger(p) && p > 0 && p < 65536
+const short = n => String(n || '').trim().slice(0, 32)
 
-// coerce a settings value to its allowed type/range
+// coerce a shared setting to its allowed type/range
 function clean(k, v) {
   if (typeof DEFAULTS[k] === 'boolean') return !!v
   if (typeof DEFAULTS[k] === 'number') return Math.max(0, Math.min(64, +v || 0))
-  if (k === 'version') return v === 'auto' || SUPPORTED.includes(v) ? v : 'auto'
   if (k === 'view') return ['tiny', 'short', 'normal'].includes(v) ? v : 'tiny'
   return DEFAULTS[k]
+}
+
+// validate { name, host, port, version } for a new or edited bot; returns error text or the clean bot fields
+function botFields(body, cur = {}) {
+  const f = {
+    name: body.name ?? cur.name, host: String(body.host ?? cur.host ?? '').trim().toLowerCase(),
+    port: body.port === undefined || body.port === '' ? cur.port ?? 25565 : +body.port,
+    version: body.version ?? cur.version ?? 'auto',
+  }
+  if (!validName(f.name)) return 'username: 3-16 letters, numbers or _'
+  if (!validHost(f.host)) return 'server address looks wrong'
+  if (!validPort(f.port)) return 'port must be 1-65535'
+  if (f.version !== 'auto' && !SUPPORTED.includes(f.version)) return 'unsupported version'
+  if (S.bots.some(b => b !== cur && b.name === f.name && b.host === f.host && b.port === f.port)) return 'that username is already on this server'
+  return f
 }
 
 async function readBody(q) {
@@ -38,47 +54,53 @@ async function handle(q, body, send) {
 
   if (what === 'state') return send(200, { ...stats(), versions: ['auto', ...SUPPORTED.slice().reverse()] })
 
-  if (what === 'server') {
-    S.host = String(body.host || S.host).trim(); S.port = +body.port || 25565; server.info = null
-    save(); restartAll(); return send(200, {})
-  }
-
-  if (what === 'settings') {
+  if (what === 'settings') { // shared behaviour for all bots
     const old = { ...S.set }
     for (const k in DEFAULTS) if (k in body) S.set[k] = clean(k, body[k])
     save()
-    if (old.version !== S.set.version || old.view !== S.set.view) restartAll() // needs a rejoin
+    if (old.view !== S.set.view) S.bots.forEach(b => restart(b.id)) // needs a rejoin
     else for (const st of live.values()) st.moves?.()
     return send(200, {})
   }
 
   if (what === 'places') {
-    if (q.method === 'DELETE') delete S.places[id]
-    else { if (!body.name) return send(400, { error: 'name needed' }); S.places[place(body.name)] = { x: +body.x || 0, y: +body.y || 0, z: +body.z || 0 } }
+    if (q.method === 'DELETE') {
+      S.places = S.places.filter(p => p.id !== id)
+      S.bots.forEach(b => { if (b.at === id) delete b.at })
+    } else {
+      const name = short(body.name), server = String(body.server || '')
+      if (!name) return send(400, { error: 'name needed' })
+      if (!S.bots.some(b => serverKey(b.host, b.port) === server)) return send(400, { error: 'pick a server' })
+      S.places.push({ id: newId(), name, server, x: +body.x || 0, y: +body.y || 0, z: +body.z || 0 })
+    }
     save(); return send(200, {})
   }
 
   if (what === 'bots') {
     if (q.method === 'POST' && !id) {
-      if (!validName(body.name) || S.bots.some(b => b.name === body.name)) return send(400, { error: 'name: 3-16 chars A-Z 0-9 _, unique' })
-      S.bots.push({ name: body.name }); save(); start(body.name); return send(200, {})
+      const f = botFields(body); if (typeof f === 'string') return send(400, { error: f })
+      const bot = { id: newId(), ...f }; S.bots.push(bot); save(); start(bot.id); return send(200, {})
     }
-    const cfg = S.bots.find(b => b.name === id), st = live.get(id)
+    const cfg = S.bots.find(b => b.id === id), st = live.get(id)
     if (!cfg) return send(404, { error: 'no bot' })
     if (q.method === 'DELETE') { stop(id); S.bots = S.bots.filter(b => b !== cfg); save(); return send(200, {}) }
-    if (act === 'rename') {
-      if (!validName(body.name) || S.bots.some(b => b.name === body.name)) return send(400, { error: 'bad name' })
-      stop(id); cfg.name = body.name; save(); start(cfg.name); return send(200, {})
+    if (act === 'edit') { // username / server / port / version -> rejoin
+      const f = botFields(body, cfg); if (typeof f === 'string') return send(400, { error: f })
+      if (serverKey(f.host, f.port) !== serverKey(cfg.host, cfg.port)) delete cfg.at // places belong to a server
+      Object.assign(cfg, f); save(); restart(id); return send(200, {})
     }
     if (act === 'send') {
-      const p = S.places[body.place]; if (!p) return send(400, { error: 'no place' })
-      cfg.at = body.place; save(); st?.goto?.(p, body.place); return send(200, {})
+      const p = placeOf(body.place); if (!p) return send(400, { error: 'no place' })
+      if (p.server !== serverKey(cfg.host, cfg.port)) return send(400, { error: 'that place is on another server' })
+      cfg.at = p.id; save(); st?.goto?.(p); return send(200, {})
     }
     if (act === 'roam') { delete cfg.at; save(); st?.roam?.(); return send(200, {}) }
-    if (act === 'restart') { stop(id); start(id); return send(200, {}) }
-    if (act === 'here' && st?.bot?.entity) {
-      const p = st.bot.entity.position
-      S.places[place(body.name)] = { x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z) }
+    if (act === 'restart') { restart(id); return send(200, {}) }
+    if (act === 'here') {
+      const pos = st?.bot?.entity?.position, name = short(body.name)
+      if (!pos) return send(400, { error: 'bot is not in the world' })
+      if (!name) return send(400, { error: 'name needed' })
+      S.places.push({ id: newId(), name, server: serverKey(cfg.host, cfg.port), x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) })
       save(); return send(200, {})
     }
   }

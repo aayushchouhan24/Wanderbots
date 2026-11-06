@@ -2,78 +2,92 @@
 <style>
 :root{--bg:#111;--card:#1b1b1b;--line:#2a2a2a;--fg:#e8e8e8;--dim:#888;--ok:#5fd068;--warn:#e8b339;--bad:#e5534b}
 *{box-sizing:border-box}body{margin:0;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg)}
-main{max-width:1000px;margin:auto;padding:20px}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}
+main{max-width:1000px;margin:auto;padding:20px}h1{font-size:18px;margin:0}h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dim{color:var(--dim)}.sp{flex:1}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dim{color:var(--dim)}.sp{flex:1}.sm{font-size:12px}
 input,select,button{font:inherit;background:#0c0c0c;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
-input{width:120px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px 16px;margin:8px 0}.grid b{display:block;font-weight:normal;color:var(--dim);font-size:11px}
+input{width:130px}.w-host{width:230px}.w-port{width:80px}.w-xyz{width:70px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px 16px;margin:10px 0 4px}.grid b{display:block;font-weight:normal;color:var(--dim);font-size:11px}
 .set{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px 20px}.set label{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .set input[type=number]{width:70px}.set input[type=checkbox]{width:auto}
-.err{color:var(--bad);font-size:12px;word-break:break-all}
+.edit{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.err{color:var(--bad);font-size:12px;word-break:break-all;margin-top:4px}
 #login{max-width:320px;margin:18vh auto;padding:20px}#login input{width:100%;margin:10px 0}#login button{width:100%}
 [hidden]{display:none!important}
 </style></head><body>
 
-<div id="login" class="card" hidden><h1>Wanderbots</h1><div class="dim">Enter your login key</div>
+<div id="login" class="card" hidden><h1>Wanderbots</h1><div class="dim" style="margin-top:4px">Enter your login key</div>
 <form onsubmit="login(event)"><input id="lk" type="password" autocomplete="current-password" placeholder="key" autofocus><button class="p">Log in</button></form>
-<div id="lerr" class="err"></div><div class="dim" style="font-size:12px;margin-top:10px">First start? The key is printed in the server log.</div></div>
+<div id="lerr" class="err"></div><div class="dim sm" style="margin-top:10px">First start? The key is printed in the server log.</div></div>
 
 <main id="app" hidden>
-<div class="row"><h1>Wanderbots</h1><span class="sp"></span><button onclick="chkey()">Change key</button><button onclick="logout()">Log out</button></div>
-<div id="srv" class="dim">…</div>
+<div class="row"><h1>Wanderbots</h1><span id="mem" class="dim sm"></span><span class="sp"></span><button onclick="chkey()">Change key</button><button onclick="logout()">Log out</button></div>
 
-<h2>Server</h2><div class="card row">
-<input id="host" placeholder="host" style="width:240px"><input id="port" placeholder="25565" style="width:80px">
-<button onclick="api('server',{host:v('host'),port:v('port')})">Save &amp; reconnect</button></div>
+<h2>Add a bot</h2><div class="card row">
+<input id="nb" placeholder="username"><input id="nh" class="w-host" placeholder="server address"><input id="np" class="w-port" placeholder="25565">
+<select id="nv"></select><button class="p" onclick="addBot()">+ Add bot</button></div>
 
-<h2>Bot settings</h2><div class="card"><div class="set" id="set"></div>
-<div class="row" style="margin-top:12px"><span class="sp"></span><button class="p" onclick="saveSet()">Save settings</button></div></div>
-
-<h2>Bots</h2><div class="card row"><input id="nb" placeholder="username"><button class="p" onclick="api('bots',{name:v('nb')}).then(j=>j&&(nb.value=''))">+ Add bot</button></div>
-<div id="bots"></div>
+<h2>Bots</h2><div id="bots"></div>
 
 <h2>Places</h2><div class="card row">
-<input id="pn" placeholder="name e.g. farm"><input id="px" placeholder="x" style="width:70px"><input id="py" placeholder="y" style="width:70px"><input id="pz" placeholder="z" style="width:70px">
-<button onclick="api('places',{name:v('pn'),x:v('px'),y:v('py'),z:v('pz')})">Save place</button></div>
+<input id="pn" placeholder="name e.g. farm"><select id="ps"></select>
+<input id="px" class="w-xyz" placeholder="x"><input id="py" class="w-xyz" placeholder="y"><input id="pz" class="w-xyz" placeholder="z">
+<button onclick="addPlace()">Save place</button></div>
 <div id="places"></div>
+
+<h2>Behaviour (all bots)</h2><div class="card"><div class="set" id="set"></div>
+<div class="row" style="margin-top:12px"><span class="sp"></span><button class="p" onclick="saveSet()">Save</button></div></div>
 </main><script>
 const $=id=>document.getElementById(id),v=id=>$(id).value.trim(),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')
-let tok=localStorage.t||'',S,setDrawn=0
-const F=[['version','Minecraft version','sel'],['view','View distance','view'],['roam','Roam radius (blocks)','num'],['homeR','Stay radius at a place','num'],
- ['reconnect','Reconnect delay (s)','num'],['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk']]
+let tok=localStorage.t||'',S,setDrawn=0,editing=''
+const F=[['view','View distance','view'],['roam','Roam radius (blocks)','num'],['homeR','Stay radius at a place','num'],['reconnect','Reconnect delay (s)','num'],
+ ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk']]
+const srvOf=b=>b.host+':'+b.port
 function show(ok){$('login').hidden=ok;$('app').hidden=!ok}
 async function api(p,b,m){const r=await fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:{'x-token':tok,'content-type':'application/json'},body:b&&JSON.stringify(b)})
  const j=await r.json().catch(()=>({}));if(r.status==401){tok=localStorage.t='';show(false);return}
- if(j.error){alert(j.error);return}if(j.relogin){alert('Key changed. Log in with the new key.');tok=localStorage.t='';show(false);return}if(b||m)load();return j}
+ if(j.error){alert(j.error);return}if(j.relogin){alert('Key changed. Log in with the new key.');tok=localStorage.t='';show(false);return}if(b||m)load();return j||{}}
 async function login(e){e.preventDefault();const r=await fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({key:$('lk').value})}),j=await r.json()
- if(j.token){tok=localStorage.t=j.token;$('lk').value='';$('lerr').textContent='';show(true);setDrawn=0;load()}else $('lerr').textContent=j.error}
+ if(j.token){tok=localStorage.t=j.token;$('lk').value='';$('lerr').textContent='';setDrawn=0;load()}else $('lerr').textContent=j.error}
 function logout(){api('logout',{});tok=localStorage.t='';show(false)}
 function chkey(){const k=prompt('New login key (8+ characters)');k&&api('key',{key:k})}
+const vopts=sel=>S.versions.map(o=>`<option ${o==sel?'selected':''}>${esc(o)}</option>`).join('')
+function addBot(){api('bots',{name:v('nb'),host:v('nh'),port:v('np'),version:$('nv').value}).then(j=>{if(j)nb.value=''})}
+function addPlace(){api('places',{name:v('pn'),server:$('ps').value,x:v('px'),y:v('py'),z:v('pz')}).then(j=>{if(j)pn.value=px.value=py.value=pz.value=''})}
 function drawSet(){$('set').innerHTML=F.map(([k,l,t])=>{const x=S.set[k]
  const i=t=='chk'?`<input type=checkbox id="c_${k}" ${x?'checked':''}>`:t=='num'?`<input type=number min=0 max=64 id="c_${k}" value="${x}">`
- :`<select id="c_${k}">${(t=='sel'?S.versions:['tiny','short','normal']).map(o=>`<option ${o==x?'selected':''}>${esc(o)}</option>`).join('')}</select>`
- return `<label>${l}${i}</label>`}).join('');setDrawn=1}
+ :`<select id="c_${k}">${['tiny','short','normal'].map(o=>`<option ${o==x?'selected':''}>${o}</option>`).join('')}</select>`
+ return `<label>${l}${i}</label>`}).join('');$('nv').innerHTML=vopts('auto');setDrawn=1}
 function saveSet(){const o={};F.forEach(([k,,t])=>o[k]=t=='chk'?$('c_'+k).checked:$('c_'+k).value);api('settings',o).then(()=>setDrawn=0)}
 function fmt(s){return s>3600?(s/3600|0)+'h'+((s%3600)/60|0)+'m':s>60?(s/60|0)+'m':s+'s'}
-async function load(){const j=await api('state');if(!j)return;S=j;show(true);const s=S.server,pl=Object.keys(S.places)
- $('srv').textContent=`${s.host}:${s.port} · ${s.server||'not reached'}${s.version?' → using '+s.version:''}${s.online!=null?' · '+s.online+'/'+s.max+' online':''}${s.motd?' · '+s.motd:''} · ${S.mem} MB RAM`
- if(!document.activeElement.matches('input')){host.value=s.host;port.value=s.port}
- if(!setDrawn)drawSet()
- const opts=pl.map(p=>`<option>${esc(p)}</option>`).join('')
- $('bots').innerHTML=S.bots.map(b=>{const c=b.up?'var(--ok)':b.task=='offline'?'var(--bad)':'var(--warn)',n=esc(b.name)
-  return `<div class="card"><div class="row"><span class="dot" style="background:${c}"></span><b>${n}</b><span class="dim">${esc(b.task)}</span><span class="sp"></span>
-  <select id="s_${n}"><option value="">send to…</option>${opts}</select><button onclick="send('${n}')">Go</button>
-  <button onclick="api('bots/${n}/roam',{})">Roam</button><button onclick="here('${n}')">Save spot</button>
-  <button onclick="ren('${n}')">Rename</button><button onclick="api('bots/${n}/restart',{})">Rejoin</button><button onclick="confirm('Remove ${n}?')&&api('bots/${n}',null,'DELETE')">✕</button></div>
+function card(b){const c=b.up?'var(--ok)':b.task=='offline'?'var(--bad)':'var(--warn)',i=b.id,srv=srvOf(b)
+ const places=S.places.filter(p=>p.server==srv).map(p=>`<option value="${p.id}" ${p.id==b.at?'selected':''}>${esc(p.name)}</option>`).join('')
+ const place=S.places.find(p=>p.id==b.at)
+ const info=[b.server||'not reached',b.using&&'using '+b.using+(b.version=='auto'?' (auto)':''),b.online!=null&&b.online+'/'+b.max+' online',b.motd].filter(Boolean).map(esc).join(' · ')
+ return `<div class="card"><div class="row"><span class="dot" style="background:${c}"></span><b>${esc(b.name)}</b><span class="dim">${esc(b.task)}</span><span class="sp"></span>
+  <select id="s_${i}"><option value="">send to…</option>${places}</select><button onclick="send('${i}')">Go</button>
+  <button onclick="api('bots/${i}/roam',{})">Roam</button><button onclick="here('${i}')">Save spot</button>
+  <button onclick="editing='${i}';render()">Edit</button><button onclick="api('bots/${i}/restart',{})">Rejoin</button><button onclick="confirm('Remove ${esc(b.name)}?')&&api('bots/${i}',null,'DELETE')">✕</button></div>
+  <div class="dim sm" style="margin-top:6px">${esc(srv)} — ${info}</div>
   <div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div>
-  <div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>uptime</b>${b.up?fmt(b.up):'–'}</div><div><b>players</b>${b.players??'–'}</div><div><b>place</b>${esc(b.at||'–')}</div></div>
-  ${b.err?`<div class="err">${esc(b.err)}</div>`:''}</div>`}).join('')||'<div class="card dim">No bots yet.</div>'
- $('places').innerHTML=pl.map(p=>{const c=S.places[p];return `<div class="card row"><b>${esc(p)}</b><span class="dim">${c.x} ${c.y} ${c.z}</span><span class="sp"></span><button onclick="api('places/${encodeURIComponent(p)}',null,'DELETE')">✕</button></div>`}).join('')}
-function send(n){const p=$('s_'+n).value;p&&api(`bots/${n}/send`,{place:p})}
-function ren(n){const x=prompt('New username',n);x&&x!=n&&api(`bots/${n}/rename`,{name:x})}
-function here(n){const x=prompt('Name this spot (e.g. farm)');x&&api(`bots/${n}/here`,{name:x})}
+  <div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>uptime</b>${b.up?fmt(b.up):'–'}</div><div><b>place</b>${esc(place?.name||'–')}</div></div>
+  ${b.err?`<div class="err">${esc(b.err)}</div>`:''}
+  ${editing==i?`<div class="edit row"><input id="e_n" value="${esc(b.name)}" placeholder="username"><input id="e_h" class="w-host" value="${esc(b.host)}" placeholder="server address">
+   <input id="e_p" class="w-port" value="${b.port}"><select id="e_v">${vopts(b.version)}</select>
+   <button class="p" onclick="saveEdit('${i}')">Save &amp; rejoin</button><button onclick="editing='';render()">Cancel</button></div>`:''}</div>`}
+function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),host:v('e_h'),port:v('e_p'),version:$('e_v').value}).then(j=>{if(j){editing='';render()}})}
+function render(){if(!S)return
+ $('mem').textContent=S.mem+' MB RAM · '+S.bots.length+' bots'
+ if(!setDrawn)drawSet()
+ $('bots').innerHTML=S.bots.map(card).join('')||'<div class="card dim">No bots yet. Add one above.</div>'
+ const servers=[...new Set(S.bots.map(srvOf))],ps=$('ps'),cur=ps.value
+ ps.innerHTML=servers.map(s=>`<option ${s==cur?'selected':''}>${esc(s)}</option>`).join('')||'<option value="">add a bot first</option>'
+ $('places').innerHTML=S.places.map(p=>`<div class="card row"><b>${esc(p.name)}</b><span class="dim">${p.x} ${p.y} ${p.z}</span><span class="dim sm">${esc(p.server)}</span><span class="sp"></span>
+  <button onclick="api('places/${p.id}',null,'DELETE')">✕</button></div>`).join('')}
+async function load(){const j=await api('state');if(!j||!j.bots)return;S=j;show(true);render()}
+function send(i){const p=$('s_'+i).value;p&&api(`bots/${i}/send`,{place:p})}
+function here(i){const x=prompt('Name this spot (e.g. farm)');x&&api(`bots/${i}/here`,{name:x})}
 tok?load():show(false)
-setInterval(()=>{if(tok&&!$('app').hidden&&!document.activeElement.matches('input,select'))load()},2000)
+setInterval(()=>{if(tok&&!$('app').hidden&&!editing&&!document.activeElement.matches('input,select'))load()},2000)
 </script></body></html>
