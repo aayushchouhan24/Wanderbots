@@ -5,6 +5,8 @@ import { Vec3 } from 'vec3'
 import { S, eff, save } from './store.js'
 import { survive, goto } from './survival.js'
 import { ensureAI, stopAI } from './aiplay.js'
+import { fightPlayer } from './combat.js'
+import { upgradeGear } from './gear.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -102,6 +104,17 @@ export async function think(b, st, cfg) {
     if (danger && !st.abort) { st.abort = true; b.pathfinder.stop(); try { b.stopDigging() } catch {} }
   }
   if (!e || st.busy || b.isSleeping) return
+  if (st.gearUpgrade && !st.ai) { // got diamonds/iron: make and wear the best gear
+    st.gearUpgrade = false; st.busy = true; st.task = 'upgrading gear'
+    try { st.log?.push({ t: Date.now(), type: 'event', text: 'gear: ' + (await upgradeGear(b)).msg }) } catch {}
+    st.busy = false; return
+  }
+  if (st.revenge && !st.ai) { // a player took us to half health: fight back (legit technique, see combat.js)
+    const name = st.revenge.name
+    st.busy = true; st.task = 'fighting ' + name
+    try { st.log?.push({ t: Date.now(), type: 'event', text: 'fight with ' + name + ': ' + await fightPlayer(b, name) }) } catch {}
+    st.busy = false; st.revenge = null; return
+  }
   const mode = cfg.mode || 'roam', home = homeOf(cfg)
   const run = async (task, fn) => { st.busy = true; st.task = task; try { await fn() } catch {} st.busy = false }
 

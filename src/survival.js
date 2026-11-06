@@ -5,6 +5,7 @@
 import pf from 'mineflayer-pathfinder'
 import { Vec3 } from 'vec3'
 import { save } from './store.js'
+import { housePlan, houseStatus, buildHouse, getTypeOfGeneric } from './mc/build.js'
 
 const { goals, Movements } = pf
 const wait = ms => new Promise(r => setTimeout(r, ms))
@@ -174,7 +175,8 @@ export async function survive(b, st, cfg, c, home) {
     task('crafting a wooden pickaxe'); await planks(b, 5); if (count(b, 'stick') < 2) await craft(b, st, 'stick'); return craft(b, st, 'wooden_pickaxe')
   }
   for (const [tool, need] of [['stone_pickaxe', 3], ['stone_sword', 2], ['stone_axe', 3]]) {
-    if (has(b, tool) || (tool !== 'stone_pickaxe' && pick < 2)) continue
+    const type = tool.split('_')[1], better = /^(stone|iron|diamond|netherite|golden|copper)_/
+    if (b.inventory.items().some(i => i.name.endsWith('_' + type) && better.test(i.name)) || (tool !== 'stone_pickaxe' && pick < 2)) continue // already has one this good or better
     if (cobble < need) { task(`mining stone for ${tool.replace('_', ' ')} (${cobble}/${need})`); return gather(b, st, isStone, 'stone') }
     if (count(b, 'stick') < 2) { await planks(b, 2); await craft(b, st, 'stick') }
     task('crafting ' + tool.replace('_', ' ')); return craft(b, st, tool)
@@ -190,19 +192,23 @@ export async function survive(b, st, cfg, c, home) {
     task('placing the chest'); return placeInBase(b, 'chest', home, CHEST)
   }
 
-  // shelter: 5x5 hut with a door and a roof
-  st.badCells ||= new Set()
-  const todo = SHELTER.filter(o => !st.badCells.has(o.join()) && air(b.blockAt(at(home, o))))
-  if (todo.length) {
-    const blocks = count(b, 'cobblestone') + count(b, /_planks$/)
-    if (blocks < Math.min(todo.length, 16)) { task(`gathering blocks for the shelter (${blocks}/${Math.min(todo.length, 16)})`); return gather(b, st, isStone, 'stone') }
-    task(`building the shelter (${SHELTER.length - todo.length}/${SHELTER.length})`)
-    await goto(b, new goals.GoalBlock(home.x, home.y, home.z)).catch(() => {})
-    for (const o of todo.slice(0, 8)) {
-      const pos = at(home, o)
-      if (pos.floored().equals(b.entity.position.floored()) || pos.floored().equals(b.entity.position.floored().offset(0, 1, 0))) continue
-      try { if (await placeAt(b, /^cobblestone$|_planks$/, pos)) st.count('placed') } catch { st.badCells.add(o.join()) } // skip cells it can't fill
-    }
+  // house: Mindcraft's small wood house blueprint (plank floor, walls and roof, log corners, door,
+  // plus bed, chest and torches if it has them). Stone house if it has lots of cobblestone and little wood.
+  const style = cfg.house?.style || (count(b, 'cobblestone') >= 50 && count(b, /_log$/) < 6 ? 'stone' : 'wood')
+  const plan = housePlan(b, cfg, style, home)
+  if (!cfg.house) { cfg.house = plan; save() }
+  const hs = houseStatus(b, plan)
+  if (hs.todo) {
+    const sum = re => Object.entries(hs.missing).filter(([t]) => re.test(t)).reduce((n, [, v]) => n + v, 0)
+    const needLogs = sum(/_log$/), needPlanks = sum(/_planks$/)
+    if (needLogs || needPlanks > count(b, /_log$/) * 4) { task(`gathering wood for the house (${hs.total - hs.todo}/${hs.total} placed)`); return gather(b, st, isLog, 'trees') }
+    if (needPlanks) { task('making planks for the house'); await planks(b, count(b, /_planks$/) + needPlanks); return }
+    if (hs.missing.cobblestone) { task(`mining stone for the house (${hs.total - hs.todo}/${hs.total} placed)`); return gather(b, st, isStone, 'stone') }
+    const door = getTypeOfGeneric(b, 'door')
+    if (!has(b, door) && count(b, /_planks$/) >= 6 && !st.doorTried) { st.doorTried = true; task('crafting a door'); await craft(b, st, door).catch(() => {}); return }
+    task(`building the house (${hs.total - hs.todo}/${hs.total})`)
+    const r = await buildHouse(b, plan, 24)
+    st.count('placed', r.placed)
     return
   }
 

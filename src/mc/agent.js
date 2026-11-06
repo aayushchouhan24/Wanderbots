@@ -34,6 +34,7 @@ class ActionManager {
   async runAction(label, fn, { timeout = 5 } = {}) { // timeout in minutes
     await this.stop()
     this.agent.clearBotLogs()
+    this.lastActive = Date.now()
     this.executing = true
     this.currentActionLabel = label
     this.timedout = false
@@ -55,6 +56,7 @@ class ActionManager {
     if (out.length > 600) out = out.slice(0, 250) + '\n...\n' + out.slice(-300)
     this.executing = false
     this.currentActionLabel = ''
+    this.lastActive = Date.now()
     this.agent.clearBotLogs()
     if (!interrupted) bot.emit('idle')
     return { success, message: out.trim(), interrupted, timedout }

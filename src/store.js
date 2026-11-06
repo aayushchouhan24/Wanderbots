@@ -16,6 +16,8 @@ export const DEFAULTS = {
   replies: true,      // answer when someone says the bot's name
   greet: false,       // say hi when players join
   owners: '',         // comma-separated player names allowed to use !commands in chat
+  nicknames: '',      // extra names the bot answers to, comma-separated
+  retaliate: 'everyone', // fight back when a player takes it to half health: 'everyone' | 'others' (not owners) | 'off'
   ai: false,          // answer chat with Claude Haiku (needs an API key in the panel)
   persona: '',        // short personality for AI chat, e.g. "chill builder who loves farming"
   aiMax: 30,          // max AI replies per bot per hour (cost cap)
@@ -55,6 +57,7 @@ function apply(d) {
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
     spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
     set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats, lastDeath: b.lastDeath, spawnBed: b.spawnBed,
+    aiMemory: b.aiMemory, aiFacts: b.aiFacts, house: b.house,
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'

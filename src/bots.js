@@ -8,7 +8,16 @@ import { attachChat, log, say } from './chat.js'
 import { tickEnd } from './fixes.js'
 import * as via from './viaproxy.js'
 import { initMcData } from './mc/mcdata.js'
-import { stopAI } from './aiplay.js'
+import { stopAI, inbox } from './aiplay.js'
+import { fightPlayer, watchAttackers } from './combat.js'
+import { watchGifts, watchApproach } from './social.js'
+import { upgradeGear, canUpgrade, VALUABLE } from './gear.js'
+import * as skills from './mc/skills.js'
+
+const GREET = ['hey {p}, need something?', "yo {p}, what's up?", 'hi {p}! need anything?', 'oh hey {p}']
+const THANKS = ['thanks {p}!', 'ty {p} :)', 'oh nice, thanks {p}!']
+const pick = a => a[Math.floor(Math.random() * a.length)]
+const MAKES_ITEMS = /collect|craft|smelt|take|clearFurnace|workOnBase|routine|buildHouse|attack|discard|item_collecting|hunting|pickup|recover|fightBack/i
 
 const { pathfinder, Movements } = pf
 export const live = new Map() // bot id -> runtime state
@@ -32,6 +41,7 @@ export function start(id) {
   if (live.has(id) || !c0 || c0.paused) return
   const st = { task: 'connecting', err: '', joined: 0, log: [] }
   // lifetime stats live in the bot's saved config; saved at most once a minute
+  st.logTrim = setInterval(() => { if (st.log.length > 80) st.log.splice(0, st.log.length - 60); if (st.aiInbox?.length > 10) st.aiInbox.splice(0, st.aiInbox.length - 10) }, 5000)
   st.count = (k, n = 1) => { const c = cfgOf(id); if (!c) return; c.stats ||= {}; c.stats[k] = (c.stats[k] || 0) + n; dirty = true }
   live.set(id, st)
 
@@ -79,6 +89,7 @@ export function start(id) {
         b.pathfinder.setMovements(m)
       }
       st.moves()
+      if (!st.watching) attachWatchers(b, st, id)
       const loop = () => { const c = cfgOf(id); if (c) think(b, st, c).catch(() => { st.busy = false }); brain = setTimeout(loop, rnd(600, 1500)) }
       loop()
     })
@@ -101,9 +112,63 @@ export function start(id) {
   run()
 }
 
+// fighting back, gifts and greetings (once per connection)
+function attachWatchers(b, st, id) {
+  st.watching = true
+  b.once('end', () => { st.watching = false })
+  const cfgNow = () => cfgOf(id)
+  watchAttackers(b, st, () => cfgNow() && eff(cfgNow()), name => {
+    log(st, 'event', `${name} took me to half health, fighting back`)
+    if (st.ai?.agent) {
+      inbox(st, `${name} attacked you and brought you to half health. You are fighting back automatically.`)
+      st.ai.agent.actions.runAction('action:fightBack', async () => { skills.log(b, await fightPlayer(b, name, () => b.interrupt_code)) }, { timeout: 2 })
+        .then(r => { inbox(st, `Fight with ${name}: ${r.message || 'over'}.`); st.revenge = null })
+    } else { b.pathfinder.stop(); st.busy = false } // brain.js picks up st.revenge
+  })
+  const giftBusy = () => {
+    const ag = st.ai?.agent
+    if ((ag && !ag.isIdle()) || st.busy) st.lastActive = Date.now()
+    const last = Math.max(st.lastActive || 0, ag?.actions.lastActive || 0)
+    return Date.now() - last < 6000 // anything it did in the last 6 s may have added items
+  }
+  watchGifts(b, giftBusy, (from, item, n, how) => {
+    const giver = from || Object.values(b.players).map(p => p.entity).filter(e => e && e !== b.entity && e.position.distanceTo(b.entity.position) < 16)[0]?.username
+    if (!from && !giver) return // nobody around: not a gift
+    if (VALUABLE.test(item) || /^(diamond|iron|netherite)_(sword|pickaxe|axe|shovel|helmet|chestplate|leggings|boots)$/.test(item)) {
+      clearTimeout(st.gearTimer) // several stacks arrive at once: upgrade once, a moment later
+      st.gearTimer = setTimeout(() => {
+        if (st.gearRunning || Date.now() - (st.gearAt || 0) < 120e3) return
+        if (!canUpgrade(b) && !/_(sword|pickaxe|axe|shovel|helmet|chestplate|leggings|boots)$/.test(item)) return
+        st.gearAt = Date.now()
+        if (st.ai?.agent) { st.gearRunning = true; st.ai.agent.actions.runAction('action:upgradeGear', () => upgradeGear(b), { timeout: 5 }).then(r => { st.gearRunning = false; inbox(st, 'You upgraded your gear with the gift: ' + (r.message || 'done')) }) }
+        else st.gearUpgrade = true
+      }, 3000)
+    }
+    if (/^(dirt|grass_block|short_grass|tall_grass|fern|large_fern|vine|.*_seeds|.*_sapling|.*_flower|dandelion|poppy|bush|firefly_bush|leaf_litter|.*_leaves|stick|cobblestone|gravel|sand|rotten_flesh|bone|string|feather|egg|brown_egg|bamboo|kelp|seagrass)$/.test(item)) return // junk: not worth a thank-you
+    st.gifts ||= {}
+    const key = giver || '?', g = st.gifts[key] ||= { items: {}, t: 0, timer: null }
+    g.items[item] = (g.items[item] || 0) + n
+    if (g.timer || Date.now() - g.t < 300e3) { if (!g.timer) g.timer = setTimeout(() => { g.timer = null }, 300e3 - (Date.now() - g.t)); return } // already told about this giver recently
+    g.timer = setTimeout(() => {
+      g.timer = null; g.t = Date.now()
+      const list = Object.entries(g.items).map(([k, v]) => `${v} ${k}`).join(', '); g.items = {}
+      const text2 = `${giver || 'someone'} gave you ${list}`
+      log(st, 'event', text2)
+      if (st.ai) inbox(st, `Gift: ${text2}. Thank them ONCE in chat, then use it if it helps (equip better armor/tools, eat good food). Don't mention it again.`)
+      else if (giver) say(b, st, pick(THANKS).replace('{p}', giver))
+    }, 4000) // wait a moment so several stacks become one gift
+    return
+  })
+  watchApproach(b, (name, d) => {
+    const cfg = cfgNow(); if (!cfg) return
+    if (st.ai) inbox(st, `${name} walked up to you (${d} m away). If it fits, greet them briefly or ask what they need. Don't repeat greetings.`)
+    else if (eff(cfg).replies) say(b, st, pick(GREET).replace('{p}', name))
+  })
+}
+
 export function stop(id) {
   const st = live.get(id); if (!st) return
-  st.stop = true; clearTimeout(st.timer); st.bot?.quit(); live.delete(id)
+  st.stop = true; clearTimeout(st.timer); clearInterval(st.logTrim); st.bot?.quit(); live.delete(id)
 }
 
 export const restart = id => { stop(id); start(id) }

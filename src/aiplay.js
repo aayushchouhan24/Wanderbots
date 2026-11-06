@@ -14,6 +14,8 @@ import * as skills from './mc/skills.js'
 import * as world from './mc/world.js'
 import * as mc from './mc/mcdata.js'
 import { McAgent } from './mc/agent.js'
+import { BLUEPRINTS, housePlan, buildHouse } from './mc/build.js'
+import { upgradeGear, canUpgrade } from './gear.js'
 
 const wait = ms => new Promise(r => setTimeout(r, ms))
 const MAX_MSGS = 24           // conversation turns kept before older ones are folded into memory
@@ -105,11 +107,24 @@ const COMMANDS = [
   { name: 'showVillagerTrades', description: 'Show the trades of a villager (ids are in entities).', params: [P('id', 'int', 'Villager id')], act: (b, { id }) => skills.showVillagerTrades(b, id) },
   { name: 'tradeWithVillager', description: 'Trade with a villager.', params: [P('id', 'int', 'Villager id'), P('index', 'int', 'Trade number (1-based)'), P('count', 'int', 'Times')], act: (b, { id, index, count = 1 }) => skills.tradeWithVillager(b, id, index, count) },
   // Wanderbots extras
+  { name: 'buildHouse', description: 'Build, or keep building, a proper small house at your base from a blueprint. style: wood (planks walls/floor/roof + log corners), stone (cobblestone walls) or dirt (quick shelter). Places a door, bed, chest and torches if you carry them. Call again until it says complete; it reports missing materials.', params: [P('style', 'string', 'wood, stone or dirt')], timeout: 6,
+    act: async (b, { style = 'wood' }, ctx) => {
+      if (!ctx.home) { const p = b.entity.position.floored(); ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; ctx.home = ctx.cfg.spot; save() }
+      const plan = housePlan(b, ctx.cfg, BLUEPRINTS[style] ? style : 'wood', ctx.home)
+      if (!ctx.cfg.house || ctx.cfg.house.style !== plan.style) { ctx.cfg.house = plan; save() }
+      const r = await buildHouse(b, plan, 60); ctx.st.count('placed', r.placed); skills.log(b, r.report)
+    } },
   { name: 'workOnBase', description: 'Let the built-in routine do the next steps of setting up your base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot.', timeout: 4,
     act: async (b, x, ctx) => { for (let i = 0; i < 3 && !b.interrupt_code; i++) { if (await survive(b, ctx.st, ctx.cfg, ctx.c, ctx.home) === 'idle') { skills.log(b, 'The base is finished.'); return } } skills.log(b, ctx.st.task.replace(/^survival: /, 'Base routine: ')) } },
   { name: 'setBase', description: 'Make where you stand your base (home for sleeping, storage, building).', run: (b, a, x, ctx) => { const p = b.entity.position.floored(); ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; delete ctx.cfg.at; save(); return `Base set at ${p.x} ${p.y} ${p.z}.` } },
+  { name: 'upgradeGear', description: 'Turn your diamonds / iron (also diamond_block and iron_block, and what is in the nearby chest) into the best tools (sword, pickaxe, axe, shovel) and armor (helmet, chestplate, leggings, boots), and wear them. Use this whenever you get diamonds or iron.', timeout: 5,
+    act: async (b, x, ctx) => { ctx.st.gearRunning = true; ctx.st.gearAt = Date.now(); try { await upgradeGear(b) } finally { ctx.st.gearRunning = false } } },
+  { name: 'pickupItems', description: 'Walk to dropped items lying nearby and pick them up.', timeout: 2,
+    act: async b => { const it = b.nearestEntity(e => e.name === 'item' && e.position.distanceTo(b.entity.position) < 32); if (!it) { skills.log(b, 'No dropped items nearby.'); return } if (it.position.distanceTo(b.entity.position) > 6) await skills.goToPosition(b, it.position.x, it.position.y, it.position.z, 1); await skills.pickupNearbyItems(b) } },
+  { name: 'remember', description: 'Remember a fact for the long term: what a player told you, their name or nickname for you, where their base is, what they asked you to do, a lesson you learned.', params: [P('fact', 'string', 'Short fact')],
+    run: (b, a, { fact }, ctx) => { const f = String(fact || '').trim().slice(0, 160); if (!f) return 'Nothing to remember.'; ctx.cfg.aiFacts = [...(ctx.cfg.aiFacts || []).filter(x => x !== f), f].slice(-25); save(); return 'Remembered.' } },
   { name: 'chat', description: 'Say something in the game chat (when talking with players).', params: [P('message', 'string', 'One short line')], run: (b, a, { message }, ctx) => { say(b, ctx.st, String(message || '').slice(0, 200)); return 'Said it.' } },
-  { name: 'goal', description: 'Change your long-term goal.', params: [P('goal', 'string', 'The new goal')], run: (b, a, { goal }, ctx) => { ctx.st.aiGoal = String(goal || '').slice(0, 300); return 'Goal set: ' + ctx.st.aiGoal } },
+  { name: 'goal', description: 'Change your long-term goal. Only when an owner asks you to.', params: [P('goal', 'string', 'The new goal')], run: (b, a, { goal }, ctx) => { ctx.st.aiGoal = String(goal || '').slice(0, 300); return 'Goal set: ' + ctx.st.aiGoal } },
 ]
 const BY_NAME = Object.fromEntries(COMMANDS.map(c => [c.name, c]))
 const TOOLS = COMMANDS.map(c => ({
@@ -128,6 +143,7 @@ function rememberPlace(b, cfg, name) {
 
 // ---------- prompt ----------
 function system(b, cfg, st) {
+  const owners = String((cfg.set?.owners ?? S.set.owners) || '').split(',').map(s => s.trim()).filter(Boolean)
   // stable part first (cached), then goal + memory
   return [
     { type: 'text', cache_control: { type: 'ephemeral' }, text:
@@ -138,12 +154,22 @@ Minecraft knowledge:
 - Recipe counts: craftRecipe crafts a recipe N times; 1 log = 4 planks; 2 planks = 4 sticks.
 - Food: kill cows, pigs, sheep, chickens (beef, porkchop, mutton, chicken) and cook them in a furnace. Eat before hunger gets low.
 - A bed (3 wool of one colour + 3 planks) lets you sleep and sets your respawn point. Sheep give wool.
+- Build a real house with buildHouse (a wood house needs about 60 planks and 8 logs, a stone house cobblestone and planks). Never build random walls with placeHere.
 - Night is dangerous: be at your base or in a shelter, place torches, sleep if you have a bed.
 - If you are in water or an ocean, go to land first. Use goToSurface if you are underground.
+- Stay safe: don't go near lava, don't dig straight down, and don't try to go to the Nether or the End unless an owner asks you to. Mine with a plan (tunnels at your level), and go back to the surface after mining.
+- Keep your goal. Only change it (goal command) when an owner asks you to; gifts and chat are not new goals.
 - If a command fails, read why and fix the cause (missing material, need a crafting table/furnace, go somewhere else). Never repeat the exact same failing command.
 - Automatic modes protect you (self_preservation, unstuck, self_defense, hunting, item_collecting, torch_placing). If one interrupts you, continue your plan afterwards.
-Talking: if a player talks to you, answer with the chat command, briefly and casually, and help them if they ask. Don't spam chat when nobody is talking to you.` },
-    { type: 'text', text: `Your goal: ${st.aiGoal || cfg.set?.goal || S.set.goal || DEFAULT_GOAL}\nSummarized memory: '${cfg.aiMemory || ''}'` },
+Talking: if a player talks to you, answer with the chat command, briefly and casually, and help them if they ask. Don't spam chat when nobody is talking to you. Players may call you by a short form of your name.
+People: use remember for things players tell you that matter later (their name, their base, what they want from you, promises). Respect what they told you before.
+Gifts: when a player gives you items, thank them and use the items (wear better armor, hold better tools, eat good food).
+- Storage blocks hold 9 items: 1 diamond_block = 9 diamonds, 1 iron_block = 9 iron_ingot, 1 gold_block = 9 gold_ingot. upgradeGear converts them and crafts the best tools and armor for you.
+- Never put diamonds, iron, storage blocks or good gear into a chest while you could still make better tools or armor with them. Always wear the best armor and hold the best weapon you have.
+Dropped items: if items are lying near you (shown in your status), pick them up with pickupItems, especially your own things after dying.` },
+    { type: 'text', text: `Your goal: ${st.aiGoal || cfg.set?.goal || S.set.goal || DEFAULT_GOAL}\nSummarized memory: '${cfg.aiMemory || ''}'` +
+      ((cfg.aiFacts || []).length ? '\nThings you remember:\n' + cfg.aiFacts.map(f => '- ' + f).join('\n') : '') +
+      (owners.length ? `\nYour owners: ${owners.join(', ')}. When an owner tells you to do something, do it first (unless it would clearly get you killed) and confirm briefly in chat.` : '') },
   ]
 }
 
@@ -152,6 +178,10 @@ function status(b, agent, st, cfg) {
   const home = cfg.spot || (cfg.at && S.places.find(p => p.id === cfg.at))
   let s = stats(b, agent) + '\n' + inventory(b)
   if (home) s += `\n- Base: ${home.x} ${home.y} ${home.z}`
+  if (canUpgrade(b)) s += '\n- You have materials for better tools/armor: use upgradeGear now.'
+  const items = {}
+  for (const e of Object.values(b.entities)) if (e.name === 'item' && e.position.distanceTo(b.entity.position) < 24) { const it = e.getDroppedItem?.(); if (it) { const k = it.name; items[k] ||= { n: 0, d: 99 }; items[k].n += it.count; items[k].d = Math.min(items[k].d, Math.round(e.position.distanceTo(b.entity.position))) } }
+  if (Object.keys(items).length) s += '\n- Dropped items nearby: ' + Object.entries(items).map(([k, v]) => `${k} x${v.n} (${v.d} m)`).join(', ')
   if (cfg.lastDeath) s += `\n- You died at ${cfg.lastDeath.x} ${cfg.lastDeath.y} ${cfg.lastDeath.z}; your items may still be there (they vanish 5 minutes after death).`
   return s
 }
@@ -202,6 +232,14 @@ export function ensureAI(b, st, cfg, c, home) {
   st.ai = { loop: true, bot: b, agent, ctx: { st, cfg, c, home } }
   st.aiMsgs ||= []
   b.once('end', () => stopAI(st))
+  // after dying, first go back for the items, then let the AI continue
+  b.on('spawn', () => {
+    const d = cfg.lastDeath
+    if (st.ai?.agent !== agent || !d || Date.now() - d.t > 270e3 || (d.dim && b.game?.dimension !== d.dim)) return
+    setTimeout(() => agent.actions.runAction('action:recoverItems', async () => {
+      await skills.goToPosition(b, d.x, d.y, d.z, 2); await skills.pickupNearbyItems(b)
+    }, { timeout: 3 }).then(r => { inbox(st, `You went back to where you died and picked up what was there. ${r.message || ''}`); delete cfg.lastDeath; save() }), 1500)
+  })
   b.on('death', () => inbox(st, `You died${cfg.lastDeath ? ` at ${cfg.lastDeath.x} ${cfg.lastDeath.y} ${cfg.lastDeath.z}` : ''}. Previous actions were stopped and you have respawned. Your items may still be at the death spot for 5 minutes.`))
   run(b, st, cfg).catch(e => st.log?.push({ t: Date.now(), type: 'event', text: 'AI loop stopped: ' + String(e.message || e).slice(0, 120) }))
 }
@@ -268,6 +306,8 @@ async function run(b, st, cfg) {
       output = (r.message || (r.success ? 'Done.' : 'Failed.')) + (r.timedout ? '\nThe command timed out.' : r.interrupted ? '\nThe command was interrupted.' : '')
     }
     output = String(output ?? '').slice(0, 1500)
+    if (st.aiLast === label + '|' + output) output += '\n(You just did exactly this with the same result. Do something different.)'
+    st.aiLast = label + '|' + output.split('\n(You just')[0]
     pendingTool = { id: call.id, output }
     remember(st, label, output)
     await wait(800)

@@ -16,32 +16,27 @@ export function getNearestFreeSpace(bot, size=1, distance=8) {
      * @example
      * let position = world.getNearestFreeSpace(bot, 1, 8);
      **/
-    let empty_pos = bot.findBlocks({
-        matching: (block) => {
-            return block && block.name == 'air';
-        },
-        maxDistance: distance,
-        count: 1000
-    });
+    // Wanderbots fix: the original could return the bot's own feet/head cell and its air check
+    // (`!top.name == 'air'`) was always false. Prefer spots in reach, not inside the bot.
+    const AIR = ['air', 'cave_air', 'void_air'];
+    const feet = bot.entity.position.floored(), head = feet.offset(0, 1, 0);
+    const eyes = bot.entity.position.offset(0, bot.entity.height || 1.62, 0);
+    let empty_pos = bot.findBlocks({ matching: (block) => block && AIR.includes(block.name), maxDistance: distance, count: 1000 })
+        .filter(p => !p.equals(feet) && !p.equals(head))
+        .sort((p, q) => p.offset(0.5, 0.5, 0.5).distanceTo(eyes) - q.offset(0.5, 0.5, 0.5).distanceTo(eyes));
     for (let i = 0; i < empty_pos.length; i++) {
         let empty = true;
-        for (let x = 0; x < size; x++) {
+        for (let x = 0; x < size && empty; x++) {
             for (let z = 0; z < size; z++) {
-                let top = bot.blockAt(empty_pos[i].offset(x, 0, z));
-                let bottom = bot.blockAt(empty_pos[i].offset(x, -1, z));
-                if (!top || !top.name == 'air' || !bottom || bottom.drops.length == 0 || !bottom.diggable) {
-                    empty = false;
-                    break;
-                }
+                const p = empty_pos[i].offset(x, 0, z);
+                const top = bot.blockAt(p), bottom = bot.blockAt(p.offset(0, -1, 0));
+                if (!top || !AIR.includes(top.name) || !bottom || bottom.boundingBox !== 'block' || p.equals(feet) || p.equals(head)) { empty = false; break; }
             }
-            if (!empty) break;
         }
-        if (empty) {
-            return empty_pos[i];
-        }
+        if (empty) return empty_pos[i];
     }
+    return null;
 }
-
 
 export function getBlockAtPosition(bot, x=0, y=0, z=0) {
      /**

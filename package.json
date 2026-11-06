@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node --env-file-if-exists=.env --max-old-space-size=160 --optimize-for-size src/index.js",
+    "start": "node --env-file-if-exists=.env --max-old-space-size=1024 --optimize-for-size src/index.js",
     "dev": "node --env-file-if-exists=.env --watch src/index.js"
   },
   "dependencies": {

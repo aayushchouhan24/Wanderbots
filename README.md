@@ -32,6 +32,11 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
   - Stays home at night.
   - Rests when badly hurt.
   - Eats the best food it has and skips rotten flesh, raw chicken and spider eyes unless starving.
+- **Gear upgrades.** When it gets diamonds or iron, including storage blocks and the contents of a nearby chest, it crafts the best tools and armor (diamond first, then iron) and wears them. It takes only what it needs, makes room by storing junk, and puts leftovers back.
+- **Real houses.** It builds Mindcraft's blueprints at its base: a small wood house (plank floor, walls and roof, log corners, door, plus bed, chest and torches if it has them), a stone house or a dirt shelter. It clears the space and never breaks its own crafting tables, chests or furnaces.
+- **Fights back.** If a player takes it to half health, it fights them using real technique: aim, full-charge hits, jump crits, sprint knockback, its best weapon and a shield. There are no reach or damage hacks. You can set it to fight any player, only non-owners, or never.
+- **Social sense.** It notices gifts (thrown items or `/give`) and thanks the giver once, ignoring junk. It greets players who walk up, at most once per player every 10 minutes. It answers to short forms of its name ("wand" for Wander_MC3) and custom nicknames. In AI mode it remembers what players tell it.
+- **Owners talk normally.** Owners can say "follow me", "go to the farm", "stay here" or "get me some logs" in chat without `!`. In AI mode the AI gets it as a top-priority order; in other modes a quick AI call turns it into the right action.
 - **Per-bot settings.** Every behaviour setting can be changed for one bot only in its Settings tab. Other bots keep the defaults.
 - **On-join commands and auto-message.** Commands to run after joining, such as `/login password` for login plugins, and a message to repeat every N minutes.
 - **Lifetime stats.** Time online, joins, distance walked, kills, deaths, items picked up, blocks mined and placed, crops harvested and items crafted.
@@ -106,6 +111,10 @@ src/
   aiplay.js    "AI plays" mode: Claude + Mindcraft command set, memory, chat
   mc/          adapted from Mindcraft: skills, world, game data, modes, action manager
   survival.js  survival play: gather, craft, store, build a base
+  gear.js      gear upgrades from diamonds / iron
+  combat.js    fighting back against players (legit technique)
+  social.js    gifts, players walking up, nicknames
+  mc/build.js  blueprint houses (from Mindcraft)
   fixes.js     protocol fixes (tick_end)
   viaproxy.js  starts ViaProxy for servers newer than 26.1
   web.js       HTTP server and JSON API

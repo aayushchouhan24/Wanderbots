@@ -68,9 +68,14 @@ export async function craftRecipe(bot, itemName, num=1) {
             // Try to place crafting table
             let hasTable = world.getInventoryCounts(bot)['crafting_table'] > 0;
             if (hasTable) {
-                let pos = world.getNearestFreeSpace(bot, 1, 6);
-                await placeBlock(bot, 'crafting_table', pos.x, pos.y, pos.z);
-                craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
+                // Wanderbots fix: try a few spots instead of one, and step out of tight places if none work
+                for (let attempt = 0; attempt < 4 && !craftingTable && !bot.interrupt_code; attempt++) {
+                    if (attempt === 2) await moveAway(bot, 3);
+                    let pos = world.getNearestFreeSpace(bot, 1, 6);
+                    if (!pos) { await moveAway(bot, 4); continue; }
+                    await placeBlock(bot, 'crafting_table', pos.x, pos.y, pos.z);
+                    craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
+                }
                 if (craftingTable) {
                     recipes = bot.recipesFor(mc.getItemId(itemName), null, 1, craftingTable);
                     placedTable = true;
@@ -168,10 +173,15 @@ export async function smeltItem(bot, itemName, num=1) {
         // Try to place furnace
         let hasFurnace = world.getInventoryCounts(bot)['furnace'] > 0;
         if (hasFurnace) {
-            let pos = world.getNearestFreeSpace(bot, 1, furnaceRange);
-            await placeBlock(bot, 'furnace', pos.x, pos.y, pos.z);
-            furnaceBlock = world.getNearestBlock(bot, 'furnace', furnaceRange);
-            placedFurnace = true;
+            // Wanderbots fix: try a few spots, step out of tight places if none work
+            for (let attempt = 0; attempt < 4 && !furnaceBlock && !bot.interrupt_code; attempt++) {
+                if (attempt === 2) await moveAway(bot, 3);
+                let pos = world.getNearestFreeSpace(bot, 1, 6);
+                if (!pos) { await moveAway(bot, 4); continue; }
+                await placeBlock(bot, 'furnace', pos.x, pos.y, pos.z);
+                furnaceBlock = world.getNearestBlock(bot, 'furnace', furnaceRange);
+            }
+            placedFurnace = !!furnaceBlock;
         }
     }
     if (!furnaceBlock){
@@ -707,7 +717,8 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
         log(bot, `${blockType} already at ${targetBlock.position}.`);
         return false;
     }
-    const empty_blocks = ['air', 'water', 'lava', 'grass', 'short_grass', 'tall_grass', 'snow', 'dead_bush', 'fern'];
+    const empty_blocks = ['air', 'cave_air', 'void_air', 'water', 'lava', 'grass', 'short_grass', 'tall_grass', 'snow', 'dead_bush', 'fern', 'large_fern', // Wanderbots: + cave air and newer plants
+        'short_dry_grass', 'tall_dry_grass', 'leaf_litter', 'bush', 'firefly_bush', 'seagrass', 'tall_seagrass'];
     if (!empty_blocks.includes(targetBlock.name)) {
         log(bot, `${targetBlock.name} in the way at ${targetBlock.position}.`);
         const removed = await breakBlockAt(bot, x, y, z);
@@ -758,12 +769,19 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
     const pos_above = pos.plus(Vec3(0,1,0));
     const dont_move_for = ['torch', 'redstone_torch', 'redstone', 'lever', 'button', 'rail', 'detector_rail', 
         'powered_rail', 'activator_rail', 'tripwire_hook', 'tripwire', 'water_bucket', 'string'];
-    if (!dont_move_for.includes(item_name) && (pos.distanceTo(targetBlock.position) < 1.1 || pos_above.distanceTo(targetBlock.position) < 1.1)) {
+    // Wanderbots fix: compare cells (the original measured to the block corner and missed the bot standing in it)
+    const inMyCell = pos.floored().equals(target_dest.floored()) || pos_above.floored().equals(target_dest.floored());
+    if (!dont_move_for.includes(item_name) && (inMyCell || pos.distanceTo(target_dest.offset(0.5, 0, 0.5)) < 1.1)) {
         // too close
         let goal = new pf.goals.GoalNear(targetBlock.position.x, targetBlock.position.y, targetBlock.position.z, 2);
         let inverted_goal = new pf.goals.GoalInvert(goal);
         bot.pathfinder.setMovements(new pf.Movements(bot));
-        await bot.pathfinder.goto(inverted_goal);
+        try { await bot.pathfinder.goto(inverted_goal); } catch (e) { log(bot, `Could not step away to place ${blockType}.`); }
+        const p2 = bot.entity.position;
+        if (p2.floored().equals(target_dest.floored()) || p2.offset(0, 1, 0).floored().equals(target_dest.floored())) {
+            log(bot, `Cannot place ${blockType} at ${target_dest}: I am standing there.`);
+            return false;
+        }
     }
     if (bot.entity.position.distanceTo(targetBlock.position) > 4.5) {
         // too far
@@ -787,7 +805,14 @@ export async function placeBlock(bot, blockType, x, y, z, placeOn='bottom', dont
             return true;
         }
     } catch (err) {
-        log(bot, `Failed to place ${blockType} at ${target_dest}.`);
+        // Wanderbots fix: it often throws even when the block was placed (e.g. through ViaProxy) - check first
+        await new Promise(resolve => setTimeout(resolve, 400));
+        const now = bot.blockAt(target_dest);
+        if (now && !empty_blocks.includes(now.name)) {
+            log(bot, `Placed ${blockType} at ${target_dest}.`);
+            return true;
+        }
+        log(bot, `Failed to place ${blockType} at ${target_dest}: ${String(err?.message || err).slice(0, 80)}`);
         return false;
     }
 }

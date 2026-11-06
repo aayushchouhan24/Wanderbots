@@ -1,8 +1,9 @@
 // Chat: per-bot log, rate-limited sending, replies, greetings and owner commands.
 import { S, save, newId, eff } from './store.js'
 import { rnd } from './brain.js'
-import { aiReply, aiReady } from './ai.js'
+import { aiReply, aiReady, aiCall } from './ai.js'
 import { inbox } from './aiplay.js'
+import { isCalled } from './social.js'
 
 const pick = a => a[Math.floor(Math.random() * a.length)]
 const REPLY = ['hi', 'hey', 'yo', 'sup', 'hello :)', 'hm?', "what's up", 'yeah?', 'hey there']
@@ -18,6 +19,12 @@ export function log(st, type, text) {
 
 // at most one message every 3s per bot, like a person typing
 export function say(b, st, text) {
+  const norm = String(text).toLowerCase().replace(/[^a-z0-9 ]/g, '').trim(), now0 = Date.now()
+  st.said ||= {}
+  for (const [k, t] of Object.entries(st.said)) if (now0 - t > 180e3) delete st.said[k]
+  if (st.said[norm]) return // said this already
+  if (/\b(thanks|thank you|thx|ty)\b/.test(norm)) { if (now0 - (st.thankedAt || 0) < 300e3) return; st.thankedAt = now0 }
+  st.said[norm] = now0
   const now = Date.now(), at = Math.max(now, (st.nextSay || 0))
   st.nextSay = at + 3000
   setTimeout(() => { try { b.chat(String(text).slice(0, 250)); log(st, 'me', text) } catch {} }, at - now)
@@ -44,9 +51,15 @@ export function attachChat(b, st, cfg, { setMode }) {
     if (user === b.username) return
     const msg = message.trim(), lower = msg.toLowerCase()
     if (msg.startsWith('!') && owners(cfg).includes(user.toLowerCase())) return command(b, st, cfg, user, msg.slice(1).split(/\s+/), setMode)
-    const c = eff(cfg), now = Date.now(), named = lower.includes(b.username.toLowerCase())
+    const c = eff(cfg), now = Date.now(), named = isCalled(b.username, msg, c.nicknames) // full name, short form or nickname
     st.convo ||= {}
     const talking = named || now - (st.convo[user] || 0) < 60e3 // keeps talking to someone for a minute after they started
+    // owners can give orders in plain language (no ! needed)
+    if (owners(cfg).includes(user.toLowerCase()) && !msg.startsWith('!') && (named || Object.keys(b.players).length <= 3)) {
+      st.convo[user] = now
+      if (cfg.mode === 'ai') { inbox(st, `YOUR OWNER ${user} says: ${msg}`); return }
+      if (aiReady()) { ownerOrder(b, st, cfg, user, msg, setMode).catch(e => log(st, 'event', 'owner order failed: ' + String(e.message || e).slice(0, 100))); return }
+    }
     if (cfg.mode === 'ai' && (talking || Object.keys(b.players).length <= 3)) { st.convo[user] = now; inbox(st, `${user} says in chat: ${msg}`); return }
     if (c.ai && aiReady() && talking && now - (st.aiAt || 0) > 4000) {
       st.aiCalls = (st.aiCalls || []).filter(t => now - t < 3600e3)
@@ -62,6 +75,32 @@ export function attachChat(b, st, cfg, { setMode }) {
       st.replied = now; later(b, st, pick(REPLY))
     }
   })
+}
+
+// turn an owner's plain-language message into one of the bot's commands (one quick AI call)
+const ORDERS = [
+  ['follow', 'Follow the owner around.'], ['come', 'Come to the owner and follow them.'], ['stay', 'Stay where the owner is standing.'],
+  ['guard', 'Guard the spot where the owner is standing and fight mobs.'], ['roam', 'Wander around freely.'], ['idle', 'Stand still (AFK).'],
+  ['goto', 'Go to a saved place and stay there.', { place: { type: 'string', description: 'Saved place name' } }],
+  ['status', 'Tell the owner your health, food, position and what you are doing.'],
+  ['ai', 'Switch to playing by itself with AI, working towards a goal (use for any task like gathering, building, crafting, mining, fighting).', { goal: { type: 'string', description: 'The task or goal, in the owner\'s words' } }],
+  ['reply', 'Just answer in chat (questions, small talk).', { message: { type: 'string', description: 'Short reply' } }],
+]
+async function ownerOrder(b, st, cfg, user, msg, setMode) {
+  const places = S.places.filter(p => p.server === `${cfg.host}:${cfg.port}`).map(p => p.name)
+  const res = await aiCall({
+    max_tokens: 300,
+    system: `You control a Minecraft bot named ${b.username}. Its owner ${user} just wrote in chat. Pick the one command that does what the owner wants. Saved places: ${places.join(', ') || 'none'}. Current mode: ${cfg.mode || 'roam'}.`,
+    tools: ORDERS.map(([name, description, props = {}]) => ({ name, description, input_schema: { type: 'object', properties: props, required: Object.keys(props) } })),
+    tool_choice: { type: 'auto' },
+    messages: [{ role: 'user', content: `${user}: ${msg}` }],
+  })
+  const call = res.content.find(x => x.type === 'tool_use')
+  if (!call) return
+  log(st, 'event', `owner ${user}: "${msg}" -> ${call.name}`)
+  if (call.name === 'reply') return later(b, st, String(call.input.message || '').slice(0, 200))
+  if (call.name === 'ai') { setMode({ mode: 'ai' }); st.aiGoal = String(call.input.goal || msg).slice(0, 300); inbox(st, `YOUR OWNER ${user} asked: ${msg}`); return later(b, st, 'on it') }
+  return command(b, st, cfg, user, [call.name === 'come' ? 'come' : call.name, ...(call.input.place ? String(call.input.place).split(' ') : [])], setMode)
 }
 
 function command(b, st, cfg, user, [cmd, ...args], setMode) {
