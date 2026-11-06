@@ -42,6 +42,11 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 - **Fights back.** If a player takes it to half health, it fights them using real technique: aim, full-charge hits, jump crits, sprint knockback, its best weapon and a shield. There are no reach or damage hacks. You can set it to fight any player, only non-owners, or never.
 - **Social sense.** It notices gifts (thrown items or `/give`) and thanks the giver once, ignoring junk. It greets players who walk up, at most once per player every 10 minutes. It answers to short forms of its name ("wand" for Wander_MC3) and custom nicknames. In AI mode it remembers what players tell it.
 - **Owners talk normally.** Owners can say "follow me", "go to the farm", "stay here" or "get me some logs" in chat without `!`. In AI mode the AI gets it as a top-priority order; in other modes a quick AI call turns it into the right action.
+- **Storage sense.**
+  - It remembers every chest, barrel, shulker box and ender chest it opens, and what's inside. It also notes crafting tables, furnaces, beds and ores it sees, and the AI can ask `whereIs` an item.
+  - It doesn't carry valuables around (diamonds, gold, storage blocks, enchanted books, golden apples and so on beyond a small reserve). It puts them in an ender chest first, otherwise the chest at its base.
+  - It keeps free slots by storing or dropping junk, packs small stacks into bundles (experimental) and bulk into shulker boxes.
+- **Smarter fights.** By default it fights hostile mobs when it has a real weapon and armor, and runs when it doesn't. It never melees creepers.
 - **Per-bot settings.** Every behaviour setting can be changed for one bot only in its Settings tab. Other bots keep the defaults.
 - **On-join commands and auto-message.** Commands to run after joining, such as `/login password` for login plugins, and a message to repeat every N minutes.
 - **Lifetime stats.** Time online, joins, distance walked, kills, deaths, items picked up, blocks mined and placed, crops harvested and items crafted.
@@ -118,6 +123,7 @@ src/
   survival.js  survival play: gather, craft, store, build a base
   schematic.js schematic parsing (.litematic/.schem/.nbt/.zip), materials, building
   schemstore.js saved schematics and build jobs
+  storage.js   container memory, valuables, shulkers, bundles, inventory tidying
   gear.js      gear upgrades from diamonds / iron
   combat.js    fighting back against players (legit technique)
   social.js    gifts, players walking up, nicknames
