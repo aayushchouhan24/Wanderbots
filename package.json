@@ -1,0 +1,23 @@
+{
+  "name": "wanderbots",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --max-old-space-size=160 --optimize-for-size src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js"
+  },
+  "dependencies": {
+    "minecraft-data": "^3.119.0",
+    "minecraft-protocol": "^1.68.0",
+    "mineflayer": "^4",
+    "mineflayer-pathfinder": "^2.4.5",
+    "mongodb": "^7.8.0"
+  },
+  "version": "1.0.0",
+  "description": "Minecraft bots that join any server and hang out like real players, with a web control panel.",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}
