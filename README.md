@@ -9,6 +9,7 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 - **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
 - **Any version.** Each bot pings its server and joins with the matching version. Versions 1.8.8 to 26.1 connect directly. Newer servers (26.2, 26.3, …) go through a built-in [ViaProxy](https://github.com/ViaVersion/ViaProxy), started automatically only when needed.
 - **Modes per bot.**
+  - **Auto:** plays by itself. It picks what to do like a player would: building up its base, farming, exploring, hanging out with nearby players or relaxing. It goes home at night. This is rule-based, with no AI model and almost no extra CPU or RAM.
   - **Roam:** wanders freely.
   - **Stay:** hangs around a place, a spot or exact x y z.
   - **Follow:** follows a player. If combat is set to fight, it also protects them from mobs.
@@ -35,6 +36,7 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
   - sleep in a nearby bed at night
 
   Outside Farm and Survival modes they never break or place blocks.
+- **AI chat (optional).** Claude Haiku writes short, in-character replies when someone talks to a bot, using its status and recent chat. It runs through **Amazon Bedrock** with the server's AWS access (EC2 instance role), so no key is needed, or through the Anthropic API with a key. It can be switched on per bot, with a personality and an hourly reply cap. It uses Haiku 5.5 if your account has it, otherwise Haiku 4.5.
 - **Chat.** Bots reply when someone says their name and can greet players who join. Players listed as owners can command them in game chat (see below). Each bot keeps a log of chat and events in the panel.
 - **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
 - **Buttons for all bots.** Roam, idle, rejoin, pause, resume, send all to a place, or say something as every bot.
@@ -93,6 +95,7 @@ src/
   bots.js      bot lifecycle per server: connect, reconnect, places, stats
   brain.js     modes and "real player" behaviour, runs about once a second
   chat.js      chat log, replies, greetings, owner commands
+  ai.js        AI chat replies (Claude Haiku via Bedrock or the Anthropic API)
   survival.js  survival play: gather, craft, store, build a base
   fixes.js     protocol fixes (tick_end)
   viaproxy.js  starts ViaProxy for servers newer than 26.1
@@ -125,6 +128,8 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/bots/:id/restart`    |                         |
 | `POST`   | `/api/bots/:id/here`       | `{ name }` (save spot)  |
 | `POST`   | `/api/all/:action`           | `roam` `idle` `rejoin` `pause` `resume` `send {place}` `chat {text}` |
+| `POST`   | `/api/aiconfig`              | `{ provider: bedrock | anthropic, region, model }` |
+| `POST`   | `/api/aikey`                 | `{ key }` (write-only; empty removes it) |
 | `POST`   | `/api/places`                | `{ name, server, x, y, z }` |
 | `DELETE` | `/api/places/:id`          |                         |
 
@@ -143,6 +148,14 @@ Add player names to **Owners** in the panel. Those players can then type these i
 | `!here <name>`   | saves where you stand as a place                   |
 | `!status`        | replies with health, food, position and activity   |
 | `!help`          | lists the commands                                 |
+
+## AI chat setup
+
+1. **Bedrock (recommended on AWS):** in the Bedrock console, make sure Claude Haiku is enabled for your account. Give the EC2 instance role the `bedrock:InvokeModel` permission.
+2. In the panel's **AI chat** box, pick Bedrock and your region, for example `us-east-1`. Leave the model empty to use Haiku automatically.
+3. Turn on **AI chat** under Default behaviour, or for one bot in its Settings tab. Optionally set a personality and a replies-per-hour cap.
+
+Bots answer when someone says their name, and keep talking with that player for a minute. Nothing goes in `.env`: the provider settings are stored in the database, and an Anthropic key, if you use one, is never sent back to the browser.
 
 ## How newer servers work
 

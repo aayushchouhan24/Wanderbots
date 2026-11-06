@@ -16,6 +16,9 @@ export const DEFAULTS = {
   replies: true,      // answer when someone says the bot's name
   greet: false,       // say hi when players join
   owners: '',         // comma-separated player names allowed to use !commands in chat
+  ai: false,          // answer chat with Claude Haiku (needs an API key in the panel)
+  persona: '',        // short personality for AI chat, e.g. "chill builder who loves farming"
+  aiMax: 30,          // max AI replies per bot per hour (cost cap)
   reconnect: 10, view: 'tiny',
 }
 
@@ -24,6 +27,8 @@ export const S = {
   places: [],  // [{ id, name, server: 'host:port', x, y, z }]
   set: { ...DEFAULTS },
   keyHash: '',
+  aiKey: '',   // Anthropic API key for AI chat (set in panel, never sent to the browser)
+  ai: {},      // AI chat provider: { provider: 'bedrock' | 'anthropic', region, model }
 }
 
 // a bot's effective settings: shared defaults, overridden by its own (cfg.set)
@@ -51,7 +56,7 @@ function apply(d) {
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'
-  Object.assign(S, { bots, places, keyHash: d.keyHash || '', set: { ...DEFAULTS, ...set } })
+  Object.assign(S, { bots, places, keyHash: d.keyHash || '', aiKey: d.aiKey || '', ai: d.ai || {}, set: { ...DEFAULTS, ...set } })
 }
 
 export async function loadStore() {
@@ -69,7 +74,7 @@ export async function loadStore() {
 }
 
 export function save() {
-  const d = { bots: S.bots, places: S.places, set: S.set, keyHash: S.keyHash }
+  const d = { bots: S.bots, places: S.places, set: S.set, keyHash: S.keyHash, aiKey: S.aiKey, ai: S.ai }
   if (col) col.replaceOne({ _id: 'main' }, d, { upsert: true }).catch(e => console.log('[store] save failed:', e.message))
   else fs.writeFileSync(FILE, JSON.stringify(d, null, 1))
 }

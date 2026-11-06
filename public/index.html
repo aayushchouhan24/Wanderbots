@@ -59,25 +59,32 @@ button.g{background:none;border-color:transparent;color:var(--dim)}button.g:hove
 <button onclick="addPlace()">Save place</button></div>
 <div id="places"></div>
 
+<h2>AI chat</h2><div class="card">
+<div class="row"><select id="aip" onchange="aiDraw()"><option value="bedrock">Amazon Bedrock</option><option value="anthropic">Anthropic API</option></select>
+<span id="aib" class="row"><input id="air" style="width:130px" placeholder="us-east-1"></span>
+<input id="aim" class="w-host" style="width:260px" placeholder="model id (empty = Claude Haiku)"><button class="p" onclick="saveAi()">Save</button><span class="dim sm" id="aist"></span></div>
+<div class="row" id="aka" style="margin-top:8px"><input id="aik" type="password" class="w-host" autocomplete="off" placeholder="Anthropic API key (sk-ant-...)"><button onclick="saveKey()">Save key</button><button onclick="confirm('Remove the AI key?')&&api('aikey',{key:''})">Remove</button></div>
+<div class="hint">Claude Haiku writes short chat replies when someone talks to a bot that has "AI chat" on (turn it on under Default behaviour or in a bot's Settings). <b>Bedrock</b> uses this server's AWS access (the EC2 instance role), so no key is needed: just pick the region where Claude Haiku is enabled. Each reply costs a tiny amount; "AI replies per hour" caps it per bot.</div></div>
+
 <h2>Default behaviour</h2><div class="card"><div class="hint" style="margin:0 0 12px">Used by every bot, unless that bot has its own value in its Settings tab.</div><div class="set" id="set"></div>
 <div class="row" style="margin-top:12px"><span class="dim sm">Owners can type in game chat: !come !follow !stay !guard !roam !idle !goto &lt;place&gt; !here &lt;name&gt; !status !help</span><span class="sp"></span><button class="p" onclick="saveSet()">Save defaults</button></div></div>
 </main><script>
 const $=id=>document.getElementById(id),v=id=>$(id).value.trim(),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')
 let tok=localStorage.t||'',S,setDrawn=0,editing=''
 const draft={},tabs=JSON.parse(localStorage.tabs||'{}')
-const MODES={roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',farm:'Farm…',survive:'Survival',idle:'Idle (AFK)'}
-const MODE_HELP={roam:'Wanders around wherever it is.',stay:'Hangs around a place and walks back if it drifts away.',follow:'Follows a player. With "fight", it also protects them from mobs.',
+const MODES={auto:'Auto (plays by itself)',roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',farm:'Farm…',survive:'Survival',idle:'Idle (AFK)'}
+const MODE_HELP={auto:'Decides by itself what to do, like a player: builds up its base, farms, explores, hangs out with players nearby, relaxes. Goes home at night. Pick its base below.',roam:'Wanders around wherever it is.',stay:'Hangs around a place and walks back if it drifts away.',follow:'Follows a player. With "fight", it also protects them from mobs.',
  guard:'Stays at a spot and fights any hostile mob within the guard radius.',farm:'Harvests ripe wheat, carrots, potatoes and beetroot around a place and replants them.',
  survive:'Plays survival: chops wood, crafts tools, mines stone, places a chest, builds a small hut at its base, makes a bed from sheep wool and sets its respawn there, stores loot, hunts when hungry and stays inside at night. It digs and places blocks.',
  idle:'Stands still and looks around (AFK).'}
-const PLACE_MODES=['stay','guard','farm','survive']
+const PLACE_MODES=['stay','guard','farm','survive','auto']
 const F=[['combat','Hostile mobs','sel',{flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
  ['farmR','Farm radius','num'],['reconnect','Reconnect delay (s)','num'],['view','View distance','sel',{tiny:'tiny',short:'short',normal:'normal'}],
  ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['gear','Wear best armor & weapon','chk'],['pickup','Pick up items','chk'],
  ['sleep','Sleep in beds at night','chk'],['recover','Get items back after dying','chk'],['setSpawn','Set respawn at base bed','chk'],['nightHome','Stay home at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
- ['greet','Greet players who join','chk'],['owners','Owners (chat commands)','txt']]
+ ['greet','Greet players who join','chk'],['ai','AI chat (Claude Haiku)','chk'],['aiMax','AI replies per hour (max)','num',500],['persona','AI personality','txt','e.g. chill builder who loves farming'],['owners','Owners (chat commands)','txt','e.g. Steve, Alex']]
 const STATS=[['online','online',s=>fmt(s)],['joins','joins'],['walked','walked',m=>Math.round(m)+' m'],['kills','kills'],['deaths','deaths'],['picked','items picked'],
- ['mined','blocks mined'],['harvested','crops harvested'],['crafted','crafted'],['placed','blocks placed'],['stored','chest trips'],['msgs','auto-messages']]
+ ['mined','blocks mined'],['aiReplies','AI replies'],['harvested','crops harvested'],['crafted','crafted'],['placed','blocks placed'],['stored','chest trips'],['msgs','auto-messages']]
 const srvOf=b=>b.host+':'+b.port
 function show(ok){$('login').hidden=ok;$('app').hidden=!ok}
 async function api(p,b,m){const r=await fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:{'x-token':tok,'content-type':'application/json'},body:b&&JSON.stringify(b)})
@@ -99,11 +106,15 @@ const tm=t=>new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
 
 // one settings field; `pre` = id prefix, `own` = is this a per-bot override
 function field([k,l,t,o],x,pre,own,reset){
- const i=t=='chk'?`<input type=checkbox id="${pre}${k}" ${x?'checked':''}>`:t=='num'?`<input type=number min=0 max=64 id="${pre}${k}" value="${x}">`
- :t=='txt'?`<input id="${pre}${k}" value="${esc(x)}" placeholder="e.g. Steve, Alex">`:`<select id="${pre}${k}">${opts(o,x)}</select>`
+ const i=t=='chk'?`<input type=checkbox id="${pre}${k}" ${x?'checked':''}>`:t=='num'?`<input type=number min=0 max=${o||64} id="${pre}${k}" value="${x}">`
+ :t=='txt'?`<input id="${pre}${k}" value="${esc(x)}" placeholder="${esc(o||'')}">`:`<select id="${pre}${k}">${opts(o,x)}</select>`
  return `<label class="${t=='txt'?'wide':''} ${own?'own':''}">${l}${own&&reset?`<button class="g rs" title="use default" onclick="event.preventDefault();${reset}">↺</button>`:''}${i}</label>`}
 const read=([k,,t],pre)=>t=='chk'?$(pre+k).checked:$(pre+k).value
 function drawSet(){$('set').innerHTML=F.map(f=>field(f,S.set[f[0]],'c_')).join('');$('nv').innerHTML=vopts('auto');setDrawn=1}
+let aiShown=0
+function aiDraw(){const p=$('aip').value;$('aib').hidden=p!='bedrock';$('aka').hidden=p!='anthropic'}
+function saveAi(){api('aiconfig',{provider:$('aip').value,region:v('air'),model:v('aim')}).then(()=>aiShown=0)}
+function saveKey(){const k=v('aik');k&&api('aikey',{key:k}).then(j=>{if(j)aik.value=''})}
 function saveSet(){const o={};F.forEach(f=>o[f[0]]=read(f,'c_'));api('settings',o).then(()=>setDrawn=0)}
 
 const d=i=>draft[i]||={}
@@ -181,6 +192,8 @@ function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),address:v('e_h'),versio
 function render(){if(!S)return
  // remember unsaved per-bot settings inputs before redrawing
  document.querySelectorAll('[id^="b"][id*="_"]').forEach(el=>{const m=el.id.match(/^b(\w+?)_(\w+)$/);if(m&&F.some(f=>f[0]==m[2])){const f=F.find(f=>f[0]==m[2]),x=read(f,`b${m[1]}_`),b=S.bots.find(b=>b.id==m[1]);if(b&&String(x)!==String({...S.set,...b.own}[m[2]]))d(m[1])['s_'+m[2]]=x;else delete d(m[1])['s_'+m[2]]}})
+ if(!aiShown&&!document.activeElement.closest?.('#aip,#air,#aim')){$('aip').value=S.ai.provider;$('air').value=S.ai.region;$('aim').value=S.ai.model;aiDraw();aiShown=1}
+ $('aist').textContent=S.ai.provider=='bedrock'?'using '+S.ai.model+' in '+S.ai.region:(S.aiKeySet?'✓ key set · '+S.ai.model:'no key yet')
  $('mem').textContent=S.mem+' MB RAM · '+S.bots.length+' bots · '+S.bots.filter(b=>b.up).length+' online'
  if(!setDrawn)drawSet()
  const scroll={};document.querySelectorAll('.log').forEach(l=>scroll[l.id]=l.scrollHeight-l.scrollTop-l.clientHeight<20)

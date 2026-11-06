@@ -1,6 +1,7 @@
 // Chat: per-bot log, rate-limited sending, replies, greetings and owner commands.
 import { S, save, newId, eff } from './store.js'
 import { rnd } from './brain.js'
+import { aiReply, aiReady } from './ai.js'
 
 const pick = a => a[Math.floor(Math.random() * a.length)]
 const REPLY = ['hi', 'hey', 'yo', 'sup', 'hello :)', 'hm?', "what's up", 'yeah?', 'hey there']
@@ -42,8 +43,21 @@ export function attachChat(b, st, cfg, { setMode }) {
     if (user === b.username) return
     const msg = message.trim(), lower = msg.toLowerCase()
     if (msg.startsWith('!') && owners(cfg).includes(user.toLowerCase())) return command(b, st, cfg, user, msg.slice(1).split(/\s+/), setMode)
-    if (eff(cfg).replies && lower.includes(b.username.toLowerCase()) && Date.now() - (st.replied || 0) > 8000) {
-      st.replied = Date.now(); later(b, st, pick(REPLY))
+    const c = eff(cfg), now = Date.now(), named = lower.includes(b.username.toLowerCase())
+    st.convo ||= {}
+    const talking = named || now - (st.convo[user] || 0) < 60e3 // keeps talking to someone for a minute after they started
+    if (c.ai && aiReady() && talking && now - (st.aiAt || 0) > 4000) {
+      st.aiCalls = (st.aiCalls || []).filter(t => now - t < 3600e3)
+      if (st.aiCalls.length < c.aiMax) {
+        st.aiAt = now; st.aiCalls.push(now); st.convo[user] = now
+        aiReply(b, st, cfg, user, msg, c.persona)
+          .then(t => { if (t) { st.count?.('aiReplies'); later(b, st, t) } })
+          .catch(e => log(st, 'event', 'AI chat error: ' + (e.status ? e.status + ' ' : '') + String(e.message || e).slice(0, 120)))
+        return
+      }
+    }
+    if (c.replies && named && now - (st.replied || 0) > 8000) {
+      st.replied = now; later(b, st, pick(REPLY))
     }
   })
 }

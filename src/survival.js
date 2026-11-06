@@ -8,6 +8,7 @@ import { save } from './store.js'
 
 const { goals, Movements } = pf
 const wait = ms => new Promise(r => setTimeout(r, ms))
+const dbg = (...a) => { if (process.env.WB_DEBUG) console.log('[surv]', new Date().toISOString().slice(11, 19), ...a) }
 // walk to a goal, giving up after `ms` so one bad path can't freeze the bot
 export function goto(b, goal, ms = 25000) {
   let t
@@ -95,7 +96,7 @@ async function craft(b, st, name, n = 1, base) {
     if (!r) return false
     await goto(b, new goals.GoalNear(table.position.x, table.position.y, table.position.z, 3))
   }
-  await b.craft(r, n, table)
+  dbg('craft', name, 'table', !!table); await b.craft(r, n, table); dbg('crafted', name)
   st.count('crafted'); return true
 }
 
@@ -107,9 +108,10 @@ async function placeAt(b, name, pos) {
   for (const f of [[0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0]]) {
     const ref = b.blockAt(pos.offset(...f))
     if (ref && !air(ref) && ref.boundingBox === 'block') {
-      if (b.entity.position.distanceTo(pos) > 4) await goto(b, new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(() => {})
-      await b.equip(item, 'hand')
-      try { await b.placeBlock(ref, pos.minus(ref.position)) } catch (e) { if (air(b.blockAt(pos))) throw new Error(`can't place ${item.name} at ${pos}: ${e.message}`) }
+      dbg('place', item.name, 'at', String(pos), 'ref', ref.name, String(ref.position), 'dist', b.entity.position.distanceTo(pos).toFixed(1), 'slot', item.slot)
+      if (b.entity.position.distanceTo(pos) > 4) await goto(b, new goals.GoalNear(pos.x, pos.y, pos.z, 3)).catch(e => dbg('goto fail', e.message))
+      dbg('equip…'); await b.equip(item, 'hand'); dbg('equipped, holding', b.heldItem?.name)
+      try { dbg('placeBlock…'); await b.placeBlock(ref, pos.minus(ref.position)); dbg('placed') } catch (e) { if (air(b.blockAt(pos))) throw new Error(`can't place ${item.name} at ${pos}: ${e.message}`) }
       await wait(150)
       return !air(b.blockAt(pos))
     }

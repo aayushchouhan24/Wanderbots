@@ -6,6 +6,7 @@ import * as auth from './auth.js'
 import { start, stop, restart, live, stats, placeOf, setMode, chat, invAction } from './bots.js'
 import { MODES } from './brain.js'
 import { SUPPORTED } from './version.js'
+import { aiReady, aiConfig } from './ai.js'
 
 const page = fs.readFileSync(new URL('../public/index.html', import.meta.url))
 const validName = n => /^[A-Za-z0-9_]{3,16}$/.test(n)
@@ -16,9 +17,11 @@ const short = n => String(n || '').trim().slice(0, 32)
 // coerce a shared setting to its allowed type/range
 function clean(k, v) {
   if (typeof DEFAULTS[k] === 'boolean') return !!v
+  if (k === 'aiMax') return Math.max(0, Math.min(500, Math.round(+v || 0)))
   if (typeof DEFAULTS[k] === 'number') return Math.max(0, Math.min(64, +v || 0))
   if (k === 'view') return ['tiny', 'short', 'normal'].includes(v) ? v : 'tiny'
   if (k === 'combat') return ['flee', 'fight', 'ignore'].includes(v) ? v : 'flee'
+  if (k === 'persona') return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 200)
   if (k === 'owners') return String(v || '').split(',').map(s => s.trim()).filter(validName).slice(0, 20).join(', ')
   return DEFAULTS[k]
 }
@@ -31,7 +34,7 @@ function modePatch(cfg, st, { mode, place, player, here, xyz }) {
     if (!validName(name)) return 'pick a player to follow'
     return { mode, follow: name }
   }
-  if (['stay', 'guard', 'farm', 'survive'].includes(mode)) {
+  if (['stay', 'guard', 'farm', 'survive', 'auto'].includes(mode)) {
     if (xyz) { // walk to exact coordinates
       const [x, y, z] = String(xyz).trim().split(/[\s,]+/).map(Number)
       if (![x, y, z].every(Number.isFinite) || [x, y, z].some(n => Math.abs(n) > 3e7)) return 'coordinates must be like: 100 64 -20'
@@ -86,7 +89,19 @@ async function handle(q, body, send) {
   if (what === 'logout') { auth.logout(token); return send(200, {}) }
   if (what === 'key') { const err = auth.changeKey(body.key); return err ? send(400, { error: err }) : send(200, { relogin: true }) }
 
-  if (what === 'state') return send(200, { ...stats(), versions: ['auto', ...SUPPORTED.slice().reverse()] })
+  if (what === 'state') return send(200, { ...stats(), versions: ['auto', ...SUPPORTED.slice().reverse()], aiKeySet: !!S.aiKey, ai: { ...aiConfig(), ready: aiReady() } })
+  if (what === 'aiconfig') { // { provider, region, model }
+    const provider = body.provider === 'anthropic' ? 'anthropic' : 'bedrock'
+    const region = String(body.region || '').trim(), model = String(body.model || '').trim()
+    if (region && !/^[a-z]{2}(-[a-z]+)+-\d$/.test(region)) return send(400, { error: 'region looks wrong (e.g. us-east-1)' })
+    if (model && !/^[A-Za-z0-9.:_/-]{3,120}$/.test(model)) return send(400, { error: 'model id looks wrong' })
+    S.ai = { provider, ...(region && { region }), ...(model && { model }) }; save(); return send(200, {})
+  }
+  if (what === 'aikey') { // write-only: the key is never returned
+    const k = String(body.key || '').trim()
+    if (k && !/^sk-ant-[A-Za-z0-9_-]{20,}$/.test(k)) return send(400, { error: 'that does not look like an Anthropic API key (sk-ant-...)' })
+    S.aiKey = k; save(); return send(200, {})
+  }
 
   if (what === 'settings') { // shared behaviour for all bots
     const old = { ...S.set }

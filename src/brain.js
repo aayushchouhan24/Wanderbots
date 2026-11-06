@@ -11,7 +11,7 @@ const chance = p => Math.random() < p
 const near = (b, x, r) => x.position.distanceTo(b.entity.position) < r
 
 // modes a bot can be in (stored per bot)
-export const MODES = ['roam', 'stay', 'follow', 'guard', 'farm', 'survive', 'idle']
+export const MODES = ['auto', 'roam', 'stay', 'follow', 'guard', 'farm', 'survive', 'idle']
 
 // ---- gear: best weapon and armor by material
 const TIER = ['wooden', 'golden', 'stone', 'copper', 'iron', 'diamond', 'netherite']
@@ -73,12 +73,31 @@ function go(b, st, goal, task, dynamic = false) { st.task = task; b.pathfinder.s
 function hold(b, key, ms) { b.setControlState(key, true); setTimeout(() => b.setControlState(key, false), ms) }
 const label = m => m.displayName || m.name
 
+// auto mode: weighted pick of what to do next, kept for 1-2.5 minutes or until it's finished
+const ACT_LABEL = { survive: 'building up the base', farm: 'farming', social: 'hanging out', explore: 'exploring', roam: 'relaxing at base' }
+function pickActivity(b, st, c, home) {
+  const now = Date.now()
+  if (st.auto && !st.auto.done && now < st.auto.until) return st.auto.act
+  const options = []
+  if (now > (st.baseDone || 0)) options.push(['survive', 5])
+  const farmland = b.registry.blocksByName.farmland
+  if (farmland && b.findBlock({ point: new Vec3(home.x, home.y, home.z), matching: farmland.id, maxDistance: c.farmR })) options.push(['farm', 3])
+  const friend = b.nearestEntity(x => x.type === 'player' && x.username !== b.username && x.position.distanceTo(b.entity.position) < 48)
+  if (friend) options.push(['social', 2])
+  options.push(['explore', 1.5], ['roam', 1])
+  let r = Math.random() * options.reduce((n, o) => n + o[1], 0), act = 'roam'
+  for (const [a, w] of options) { if ((r -= w) <= 0) { act = a; break } }
+  st.auto = { act, until: now + rnd(60e3, 150e3), friend: friend?.username }
+  st.following = null; b.pathfinder.stop()
+  st.log?.push({ t: now, type: 'event', text: 'auto: ' + ACT_LABEL[act] + (act === 'social' ? ' with ' + friend.username : '') })
+  return act
+}
+
 export async function think(b, st, cfg) {
   const e = b.entity, c = eff(cfg)
   if (!e || st.busy || b.isSleeping) return
   const mode = cfg.mode || 'roam', home = homeOf(cfg)
   const run = async (task, fn) => { st.busy = true; st.task = task; try { await fn() } catch {} st.busy = false }
-  if (mode !== 'survive' && st.survMoves) { st.survMoves = false; st.moves?.() } // back to no-dig walking
 
   // distance walked (ignore teleports)
   if (st.last) { const d = e.position.distanceTo(st.last); if (d < 10) st.count('walked', d) }
@@ -160,7 +179,7 @@ export async function think(b, st, cfg) {
   }
 
   // 6. night: stay at home instead of wandering in the dark
-  if (c.nightHome && !b.time.isDay && home && (mode === 'roam' || (mode === 'survive' && st.shelterDone))) {
+  if (c.nightHome && !b.time.isDay && home && (mode === 'roam' || mode === 'auto' || (mode === 'survive' && st.shelterDone))) {
     if (e.position.distanceTo(home) > 3) return go(b, st, new goals.GoalNear(home.x, home.y, home.z, 1), 'night, heading home')
     if (!b.pathfinder.isMoving()) { st.task = 'night, staying home'; if (chance(0.3)) b.look(e.yaw + rnd(-1, 1), 0); return }
   }
@@ -186,11 +205,31 @@ export async function think(b, st, cfg) {
     if (item && b.inventory.emptySlotCount() > 0) return go(b, st, new goals.GoalNear(item.position.x, item.position.y, item.position.z, 0.5), 'picking up an item')
   }
 
-  // 10. mode
+  // 10. mode. In auto mode the bot picks its own activity like a player would.
+  let m = mode
+  if (mode === 'auto') {
+    if (!home) { const p = e.position.floored(); cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; save(); return }
+    m = pickActivity(b, st, c, home)
+  }
+  if (m !== 'survive' && st.survMoves) { st.survMoves = false; st.moves?.() } // back to no-dig walking
   const player = c.lookPlayers && b.nearestEntity(x => x.type === 'player' && near(b, x, 8))
   if (player && chance(0.6)) b.lookAt(player.position.offset(0, 1.6, 0))
 
-  if (mode === 'follow') {
+  if (m === 'social') { // hang out near a player for a while
+    const friend = b.players[st.auto.friend]?.entity
+    if (!friend) { st.auto.done = true; return }
+    if (st.following !== friend.id || !b.pathfinder.goal) { st.following = friend.id; go(b, st, new goals.GoalFollow(friend, 3), 'auto: hanging out with ' + st.auto.friend, true) }
+    if (chance(0.5)) b.lookAt(friend.position.offset(0, 1.6, 0))
+    return
+  }
+  if (m === 'explore') { // walk out somewhere new, then come back to other things
+    if (b.pathfinder.isMoving()) { st.task = 'auto: exploring'; return }
+    if (st.auto.went) { st.auto.done = true; return }
+    const a = Math.random() * Math.PI * 2, d = rnd(30, 60)
+    st.auto.went = true
+    return go(b, st, new goals.GoalNearXZ(home.x + Math.cos(a) * d, home.z + Math.sin(a) * d, 3), 'auto: exploring')
+  }
+  if (m === 'follow') {
     if (!buddy) { st.task = 'looking for ' + (cfg.follow || '?'); return }
     if (st.following !== buddy.id || !b.pathfinder.goal) { st.following = buddy.id; go(b, st, new goals.GoalFollow(buddy, 2), 'following ' + cfg.follow, true) }
     else st.task = 'following ' + cfg.follow
@@ -198,7 +237,7 @@ export async function think(b, st, cfg) {
   }
   st.following = null
 
-  if (mode === 'farm') {
+  if (m === 'farm') {
     if (!home) { st.task = 'farm: no place set'; return }
     const center = new Vec3(home.x, home.y, home.z)
     const crop = b.findBlock({ point: center, matching: bl => !!CROPS[bl.name], useExtraInfo: ripe, maxDistance: c.farmR, count: 1 })
@@ -207,29 +246,31 @@ export async function think(b, st, cfg) {
     const soil = b.findBlock({ point: center, matching: bl => bl.name === 'farmland', useExtraInfo: bl => b.blockAt(bl.position.offset(0, 1, 0))?.name === 'air', maxDistance: c.farmR })
     const hasSeed = b.inventory.items().some(i => Object.values(CROPS).some(x => x[1] === i.name))
     if (soil && hasSeed) return run('planting', () => plant(b, soil, null))
+    if (mode === 'auto') st.auto.done = true // nothing to do on the farm right now
   }
 
-  if (mode === 'survive' && Date.now() > (st.survIdle || 0)) {
+  if (m === 'survive' && Date.now() > (st.survIdle || 0)) {
     st.busy = true; let r
     try { r = await survive(b, st, cfg, c, home); st.survErr = '' } catch (err) {
       const m = String(err.message || err).slice(0, 120); st.task = 'survival: ' + m
       if (m !== st.survErr) { st.survErr = m; st.log?.push({ t: Date.now(), type: 'event', text: 'survival: ' + m }) }
     }
     st.busy = false
-    if (r === 'idle') st.survIdle = Date.now() + 60e3 // base finished: hang out a minute, then check again
+    if (r === 'idle') { st.survIdle = Date.now() + 60e3; st.baseDone = Date.now() + 10 * 60e3; if (st.auto) st.auto.done = true } // base finished
     else return
   }
 
   if (b.pathfinder.isMoving()) { if (c.fidget && chance(0.05)) b.swingArm(); return }
 
-  if (mode !== 'roam' && mode !== 'idle' && home && e.position.distanceTo(home) > (mode === 'farm' ? c.farmR : c.homeR) + 4)
+  if (m === 'roam' && mode === 'auto') m = 'stay' // auto 'relax': wander around the base
+  if (m !== 'roam' && m !== 'idle' && home && e.position.distanceTo(home) > (m === 'farm' ? c.farmR : c.homeR) + 4)
     return go(b, st, new goals.GoalNear(home.x, home.y, home.z, 1), 'going → ' + home.label)
 
-  st.task = mode === 'idle' ? 'idle (AFK)' : mode === 'guard' ? 'guarding ' + (home?.label || 'here') : mode === 'farm' ? 'farming ' + home.label + ' (waiting for crops)' : mode === 'survive' ? st.task
+  st.task = mode === 'auto' ? 'auto: ' + (m === 'stay' ? 'relaxing at base' : m === 'farm' ? 'waiting for crops' : st.task.replace(/^auto: /, '')) : mode === 'idle' ? 'idle (AFK)' : mode === 'guard' ? 'guarding ' + (home?.label || 'here') : mode === 'farm' ? 'farming ' + home.label + ' (waiting for crops)' : mode === 'survive' ? st.task
     : home && mode === 'stay' ? 'at ' + home.label : 'roaming'
   const r = Math.random()
-  if (r < 0.25 && mode !== 'idle') { // walk somewhere nearby
-    const o = (mode !== 'roam' && home) || e.position, d = mode !== 'roam' && home ? c.homeR : c.roam
+  if (r < 0.25 && m !== 'idle') { // walk somewhere nearby
+    const o = (m !== 'roam' && home) || e.position, d = m !== 'roam' && home ? c.homeR : c.roam
     if (d > 0) b.pathfinder.setGoal(new goals.GoalNear(o.x + rnd(-d, d), o.y, o.z + rnd(-d, d), 1))
   } else if (r < 0.45 && !player) b.look(e.yaw + rnd(-1.5, 1.5), rnd(-0.4, 0.3)) // glance around
   else if (!c.fidget) return
