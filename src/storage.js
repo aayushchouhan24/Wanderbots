@@ -103,17 +103,65 @@ export function extraValuables(b) {
 }
 const junkExtra = b => { const inv = counts(b.inventory.items()), out = {}; for (const [k, v] of Object.entries(inv)) if (JUNK.test(k) && v > (JUNK_KEEP[k] ?? 4)) out[k] = v - (JUNK_KEEP[k] ?? 4); return out }
 
+// deposit what fits; counts what really moved and marks the chest full when things don't fit
 async function depositInto(b, block, wanted) {
   await skills.goToPosition(b, block.position.x, block.position.y, block.position.z, 2)
+  const before = counts(b.inventory.items())
   const box = await b.openContainer(block)
-  let moved = 0
+  let full = false
   try {
     for (const [name, n] of Object.entries(wanted)) {
       const id = b.registry.itemsByName[name]?.id; if (!id) continue
-      await box.deposit(id, null, n).then(() => { moved += n }, () => {})
+      await box.deposit(id, null, Math.min(n, before[name] || 0)).catch(() => { full = true })
     }
+    if (box.containerItems().length >= box.inventoryStart) full = true
   } finally { box.close() }
+  const after = counts(b.inventory.items())
+  let moved = 0; for (const name of Object.keys(wanted)) moved += Math.max(0, (before[name] || 0) - (after[name] || 0))
+  if (full) { const c = mem(b._wbCfg?.() || {}).containers?.[key(block.position)]; if (c) c.full = true }
   return moved
+}
+
+// make more storage: craft a chest (from planks or logs) and place it at the base next to the others
+export async function makeChest(b, cfg, home) {
+  const have = n => b.inventory.items().filter(i => i.name === n).reduce((a, i) => a + i.count, 0)
+  if (!have('chest')) {
+    if (!await skills.craftRecipe(b, 'chest', 1).catch(() => false)) {
+      const log = b.inventory.items().find(i => /_(log|stem)$/.test(i.name) && !/stripped/.test(i.name))
+      if (log) { const planks = log.name.replace(/_(log|stem)$/, '_planks'); await skills.craftRecipe(b, planks, 2).catch(() => {}) }
+      await skills.craftRecipe(b, 'chest', 1).catch(() => {})
+    }
+    if (!have('chest')) return null
+  }
+  if (home) await skills.goToPosition(b, home.x, home.y, home.z, 3).catch(() => {})
+  // next to an existing chest if there is one, so storage stays in one place
+  const other = world.getNearestBlock(b, 'chest', 8)
+  let pos = null
+  if (other) for (const d of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [2, 0, 0], [-2, 0, 0], [0, 0, 2], [0, 0, -2]]) {
+    const v = other.position.offset(...d), bl = b.blockAt(v), below = b.blockAt(v.offset(0, -1, 0))
+    if (bl?.name === 'air' && below?.boundingBox === 'block') { pos = v; break }
+  }
+  pos ||= world.getNearestFreeSpace(b, 1, 6)
+  if (!pos || !await skills.placeBlock(b, 'chest', pos.x, pos.y, pos.z).catch(() => false)) return null
+  const bl = b.blockAt(new Vec3(pos.x, pos.y, pos.z))
+  return bl?.name === 'chest' ? bl : null
+}
+
+// deposit into storage, making new chests while things still don't fit
+async function storeAll(b, cfg, home, wanted, opts) {
+  let moved = 0, left = { ...wanted }
+  for (let tries = 0; tries < 4 && Object.keys(left).length; tries++) {
+    const target = findStorage(b, cfg, home, opts) || await makeChest(b, cfg, home)
+    if (!target) break
+    const before = counts(b.inventory.items())
+    const n = await depositInto(b, target, left)
+    moved += n
+    const after = counts(b.inventory.items()), next = {}
+    for (const [k, w] of Object.entries(left)) { const r = w - Math.max(0, (before[k] || 0) - (after[k] || 0)); if (r > 0 && after[k]) next[k] = r }
+    if (n === 0) { const c = mem(cfg).containers[key(target.position)]; if (c) c.full = true } // nothing fit: treat as full
+    left = next
+  }
+  return { moved, left }
 }
 
 // nearest usable storage: an ender chest (safe), else a chest/barrel at or near the base, else any known one within 64
@@ -123,12 +171,13 @@ function findStorage(b, cfg, home, { enderOk = true } = {}) {
   const p = b.entity.position, m = mem(cfg), dim = b.game?.dimension
   const homeV = home && new Vec3(home.x, home.y, home.z)
   const seenChests = Object.values(m.poi).filter(e => /^(chest|trapped_chest|barrel)$/.test(e.type) && !m.containers[key(e.pos)]).map(e => ({ type: e.type, pos: e.pos, dim: e.dim, items: {} }))
-  const known = [...Object.values(m.containers), ...seenChests].filter(c => c.dim === dim && /^(chest|trapped_chest|barrel)$/.test(c.type) && Object.values(c.items).reduce((a, n) => a + n, 0) < 26 * 64)
+  const known = [...Object.values(m.containers), ...seenChests].filter(c => c.dim === dim && /^(chest|trapped_chest|barrel)$/.test(c.type) && !c.full && Object.values(c.items).reduce((a, n) => a + n, 0) < 26 * 64)
     .map(c => ({ c, v: new Vec3(c.pos.x, c.pos.y, c.pos.z) }))
     .filter(({ v }) => v.distanceTo(p) < 96)
     .sort((a, b2) => (homeV ? a.v.distanceTo(homeV) - b2.v.distanceTo(homeV) : 0) || a.v.distanceTo(p) - b2.v.distanceTo(p))
   if (known[0]) { const bl = b.blockAt(known[0].v); if (bl && CONTAINER.test(bl.name)) return bl }
-  return near('chest') || near('barrel')
+  const free = bl => bl && !mem(cfg).containers[key(bl.position)]?.full ? bl : null
+  return free(near('chest')) || free(near('barrel'))
 }
 
 // put valuables away (ender chest first). Returns a report.
@@ -140,12 +189,14 @@ export async function storeValuables(b, cfg, home) {
     await skills.goToPosition(b, home.x, home.y, home.z, 3).catch(() => {})
     target = findStorage(b, cfg, home)
   }
-  if (!target) {
+  if (target || await makeChest(b, cfg, home)) {
+    const { moved, left } = await storeAll(b, cfg, home, extra)
+    if (moved) return `stored ${moved} valuable items${Object.keys(left).length ? ' (still carrying ' + fmt(left) + ')' : ''}`
+  }
+  {
     if (await packIntoShulker(b, extra)) return `no chest or ender chest nearby, packed ${fmt(extra)} into a shulker box`
     return 'no chest, ender chest or shulker box to keep valuables in (place a chest at your base)'
   }
-  const moved = await depositInto(b, target, extra)
-  return `stored ${moved} valuable items (${fmt(extra)}) in the ${target.name} at ${target.position.x} ${target.position.y} ${target.position.z}`
 }
 
 // ---------- shulker boxes ----------
@@ -199,11 +250,18 @@ export async function tidyInventory(b, cfg, home) {
   if (b.inventory.emptySlotCount() > 5) return 'inventory is fine'
   const out = []
   const junk = junkExtra(b)
-  const storage = findStorage(b, cfg, home, { enderOk: false })
-  if (storage && storage.position.distanceTo(b.entity.position) < 24 && Object.keys(junk).length) { out.push(`stored ${await depositInto(b, storage, junk)} junk items in the ${storage.name}`) }
-  else if (Object.keys(junk).length) {
-    for (const [name, n] of Object.entries(junk)) await skills.discard(b, name, n).catch(() => {})
-    out.push('dropped junk: ' + fmt(junk))
+  // store junk (making new chests when they are full); only truly worthless leftovers get dropped
+  if (Object.keys(junk).length) {
+    const { moved, left } = await storeAll(b, cfg, home, junk, { enderOk: false })
+    if (moved) out.push(`stored ${moved} items`)
+    const trash = Object.fromEntries(Object.entries(left).filter(([k]) => /^(rotten_flesh|poisonous_potato|dead_bush|short_grass|tall_grass|fern|vine|seagrass|leaf_litter)$/.test(k)))
+    for (const [name, n] of Object.entries(trash)) await skills.discard(b, name, n).catch(() => {})
+    if (Object.keys(trash).length) out.push('dropped trash: ' + fmt(trash))
+  }
+  // still full: store bulk building blocks too, instead of throwing them away
+  if (b.inventory.emptySlotCount() <= 3) {
+    const bulk = {}; for (const [k, v] of Object.entries(counts(b.inventory.items()))) if (!GEAR.test(k) && !VALUABLE.test(k) && !b.registry.foodsByName[k] && !/shulker_box$|bundle$|_(log|planks)$/.test(k) && v > 32) bulk[k] = v - 32
+    if (Object.keys(bulk).length) { const { moved } = await storeAll(b, cfg, home, bulk, { enderOk: false }); if (moved) out.push(`stored ${moved} bulk blocks`) }
   }
   if (b.inventory.emptySlotCount() <= 4 && b.inventory.items().some(i => /(^|_)bundle$/.test(i.name))) out.push(await packIntoBundle(b, b._wbState || {}))
   if (b.inventory.emptySlotCount() <= 3 && hasShulker(b)) {
