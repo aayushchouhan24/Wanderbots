@@ -10,16 +10,18 @@ export const SUPPORTED = [...new Set([...(mineflayer.testedVersions || []), ...m
 export const servers = new Map() // 'host:port' -> last ping result
 
 // chat component (string / JSON / NBT) -> plain text
-export const text = c => typeof c === 'string' ? c : !c ? '' : Array.isArray(c) ? c.map(text).join('') :
-  (c.text ?? c.translate ?? '') + (c.with ? ' ' + text(c.with) : '') + text(c.extra) || (c.value ? text(c.value) : JSON.stringify(c))
+export const text = c => plain(c).replace(/§./g, '')
+const plain = c => typeof c === 'string' ? c : !c ? '' : Array.isArray(c) ? c.map(plain).join('') :
+  (c.text ?? c.translate ?? '') + (c.with ? ' ' + plain(c.with) : '') + plain(c.extra) || (c.value ? plain(c.value) : JSON.stringify(c))
 
 // pref = 'auto' or a specific version
 export async function detect(host, port, pref = 'auto') {
   const r = await mc.ping({ host, port })
   const proto = r.version?.protocol, name = r.version?.name || ''
   const byProto = (mcData.postNettyVersionsByProtocolVersion.pc[proto] || []).map(v => v.minecraftVersion)
-  const auto = byProto.find(v => SUPPORTED.includes(v)) || SUPPORTED.find(v => name.includes(v)) || mineflayer.latestSupportedVersion
+  const match = byProto.find(v => SUPPORTED.includes(v)) || SUPPORTED.find(v => name.includes(v))
+  const auto = match || SUPPORTED.at(-1)
   const version = pref !== 'auto' && SUPPORTED.includes(pref) ? pref : auto
-  servers.set(serverKey(host, port), { auto, server: name, protocol: proto, online: r.players?.online, max: r.players?.max, motd: text(r.description).slice(0, 80), at: Date.now() })
+  servers.set(serverKey(host, port), { auto, server: name, protocol: proto, online: r.players?.online, max: r.players?.max, motd: text(r.description).slice(0, 80), unsupported: !match, newest: SUPPORTED.at(-1), at: Date.now() })
   return version
 }

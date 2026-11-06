@@ -23,6 +23,11 @@ export function start(id) {
       st.err = 'cannot reach server: ' + (e.message || e.code || 'no reply'); st.task = 'offline'; st.timer = setTimeout(run, 15000); return
     }
     st.version = version
+    const srv = servers.get(serverKey(cfg.host, cfg.port))
+    if (srv?.unsupported && cfg.version === 'auto') { // don't hammer a server we can't speak to
+      st.task = 'unsupported'; st.err = `server runs ${srv.server}, newest supported is ${srv.newest}. It needs ViaVersion/ViaBackwards on the server, or a ViaProxy.`
+      st.timer = setTimeout(run, 60000); return
+    }
     const b = mineflayer.createBot({ host: cfg.host, port: cfg.port, username: cfg.name, version, auth: 'offline', viewDistance: S.set.view, hideErrors: true })
     st.bot = b; st.task = 'joining'
     b.loadPlugin(pathfinder)

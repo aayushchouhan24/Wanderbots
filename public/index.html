@@ -6,7 +6,7 @@ main{max-width:1000px;margin:auto;padding:20px}h1{font-size:18px;margin:0}h2{fon
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dim{color:var(--dim)}.sp{flex:1}.sm{font-size:12px}
 input,select,button{font:inherit;background:#0c0c0c;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
-input{width:130px}.w-host{width:230px}.w-port{width:80px}.w-xyz{width:70px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
+input{width:130px}.w-host{width:300px}.w-port{width:80px}.w-xyz{width:70px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px 16px;margin:10px 0 4px}.grid b{display:block;font-weight:normal;color:var(--dim);font-size:11px}
 .set{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px 20px}.set label{display:flex;justify-content:space-between;align-items:center;gap:8px}
@@ -25,7 +25,7 @@ input{width:130px}.w-host{width:230px}.w-port{width:80px}.w-xyz{width:70px}butto
 <div class="row"><h1>Wanderbots</h1><span id="mem" class="dim sm"></span><span class="sp"></span><button onclick="chkey()">Change key</button><button onclick="logout()">Log out</button></div>
 
 <h2>Add a bot</h2><div class="card row">
-<input id="nb" placeholder="username"><input id="nh" class="w-host" placeholder="server address"><input id="np" class="w-port" placeholder="25565">
+<input id="nb" placeholder="username"><input id="nh" class="w-host" placeholder="server e.g. play.example.net:25565">
 <select id="nv"></select><button class="p" onclick="addBot()">+ Add bot</button></div>
 
 <h2>Bots</h2><div id="bots"></div>
@@ -53,7 +53,7 @@ async function login(e){e.preventDefault();const r=await fetch('/api/login',{met
 function logout(){api('logout',{});tok=localStorage.t='';show(false)}
 function chkey(){const k=prompt('New login key (8+ characters)');k&&api('key',{key:k})}
 const vopts=sel=>S.versions.map(o=>`<option ${o==sel?'selected':''}>${esc(o)}</option>`).join('')
-function addBot(){api('bots',{name:v('nb'),host:v('nh'),port:v('np'),version:$('nv').value}).then(j=>{if(j)nb.value=''})}
+function addBot(){api('bots',{name:v('nb'),address:v('nh'),version:$('nv').value}).then(j=>{if(j)nb.value=''})}
 function addPlace(){api('places',{name:v('pn'),server:$('ps').value,x:v('px'),y:v('py'),z:v('pz')}).then(j=>{if(j)pn.value=px.value=py.value=pz.value=''})}
 function drawSet(){$('set').innerHTML=F.map(([k,l,t])=>{const x=S.set[k]
  const i=t=='chk'?`<input type=checkbox id="c_${k}" ${x?'checked':''}>`:t=='num'?`<input type=number min=0 max=64 id="c_${k}" value="${x}">`
@@ -73,10 +73,9 @@ function card(b){const c=b.up?'var(--ok)':b.task=='offline'?'var(--bad)':'var(--
   <div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div>
   <div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>uptime</b>${b.up?fmt(b.up):'–'}</div><div><b>place</b>${esc(place?.name||'–')}</div></div>
   ${b.err?`<div class="err">${esc(b.err)}</div>`:''}
-  ${editing==i?`<div class="edit row"><input id="e_n" value="${esc(b.name)}" placeholder="username"><input id="e_h" class="w-host" value="${esc(b.host)}" placeholder="server address">
-   <input id="e_p" class="w-port" value="${b.port}"><select id="e_v">${vopts(b.version)}</select>
+  ${editing==i?`<div class="edit row"><input id="e_n" value="${esc(b.name)}" placeholder="username"><input id="e_h" class="w-host" value="${esc(srv)}" placeholder="server e.g. play.example.net:25565"><select id="e_v">${vopts(b.version)}</select>
    <button class="p" onclick="saveEdit('${i}')">Save &amp; rejoin</button><button onclick="editing='';render()">Cancel</button></div>`:''}</div>`}
-function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),host:v('e_h'),port:v('e_p'),version:$('e_v').value}).then(j=>{if(j){editing='';render()}})}
+function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),address:v('e_h'),version:$('e_v').value}).then(j=>{if(j){editing='';render()}})}
 function render(){if(!S)return
  $('mem').textContent=S.mem+' MB RAM · '+S.bots.length+' bots'
  if(!setDrawn)drawSet()

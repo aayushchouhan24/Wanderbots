@@ -20,13 +20,18 @@ function clean(k, v) {
   return DEFAULTS[k]
 }
 
-// validate { name, host, port, version } for a new or edited bot; returns error text or the clean bot fields
+// "play.x.net:25566", "play.x.net", "https://play.x.net:25566/" -> { host, port }
+export function parseAddress(a) {
+  const s = String(a || '').trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '')
+  const m = s.match(/^(.*?)(?::(\d+))?$/)
+  return { host: m[1], port: m[2] ? +m[2] : 25565 }
+}
+
+// validate { name, address | host+port, version } for a new or edited bot; returns error text or the clean bot fields
 function botFields(body, cur = {}) {
-  const f = {
-    name: body.name ?? cur.name, host: String(body.host ?? cur.host ?? '').trim().toLowerCase(),
-    port: body.port === undefined || body.port === '' ? cur.port ?? 25565 : +body.port,
-    version: body.version ?? cur.version ?? 'auto',
-  }
+  const addr = body.address !== undefined ? parseAddress(body.address)
+    : { host: String(body.host ?? cur.host ?? '').trim().toLowerCase(), port: body.port === undefined || body.port === '' ? cur.port ?? 25565 : +body.port }
+  const f = { name: body.name ?? cur.name, ...addr, version: body.version ?? cur.version ?? 'auto' }
   if (!validName(f.name)) return 'username: 3-16 letters, numbers or _'
   if (!validHost(f.host)) return 'server address looks wrong'
   if (!validPort(f.port)) return 'port must be 1-65535'

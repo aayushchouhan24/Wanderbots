@@ -6,7 +6,7 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 
 ## Features
 
-- **Any username, any server.** Add as many bots as you want. Each one has its own username, server address, port and version, all set in the panel.
+- **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
 - **Automatic version.** Each bot pings its server and joins with the matching Minecraft version (1.8.8 to 26.1). You can also pick a version per bot.
 - **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak, swing and eat. They never break or place blocks.
 - **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
@@ -77,9 +77,9 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/key`                   | `{ key }` (8+ chars)    |
 | `GET`    | `/api/state`                 |                         |
 | `POST`   | `/api/settings`              | shared behaviour fields |
-| `POST`   | `/api/bots`                  | `{ name, host, port, version }` |
+| `POST`   | `/api/bots`                  | `{ name, address, version }` (address like `play.x.net:25565`) |
 | `DELETE` | `/api/bots/:id`              |                         |
-| `POST`   | `/api/bots/:id/edit`         | `{ name, host, port, version }` |
+| `POST`   | `/api/bots/:id/edit`         | `{ name, address, version }` (address like `play.x.net:25565`) |
 | `POST`   | `/api/bots/:id/send`       | `{ place }` (place id)  |
 | `POST`   | `/api/bots/:id/roam`       |                         |
 | `POST`   | `/api/bots/:id/restart`    |                         |
@@ -89,7 +89,7 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 
 ## Known limits
 
-- Servers newer than 26.1 aren't supported directly yet. A server-side ViaVersion/ViaBackwards setup may let bots log in, but it can kick them for "invalid player movement". Run the server on 26.1, or wait for mineflayer to support the newer version.
+- Servers newer than 26.1 aren't supported directly. The panel marks such bots as **unsupported** and won't keep retrying the login. A server with ViaVersion and ViaBackwards may accept bots, but can kick them for "invalid player movement". Otherwise run the server on 26.1 or wait for mineflayer to support the newer version.
 - Use bots only on servers you own or have permission to use.
 
 ## License
