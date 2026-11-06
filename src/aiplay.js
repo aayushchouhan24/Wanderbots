@@ -15,6 +15,44 @@ const near = (b, pos) => Math.round(b.entity.position.distanceTo(pos))
 const ACTION_MS = 90e3
 
 // ---------- what the bot can see ----------
+const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'] // minecraft: -z is north
+const compass = (dx, dz) => COMPASS[(Math.round(Math.atan2(dz, dx) / (Math.PI / 4)) + 8) % 8]
+const LAND = /^(grass_block|dirt|coarse_dirt|podzol|mycelium|sand|red_sand|gravel|stone|snow_block|moss_block|mud|clay|terracotta)$/
+const FOOD_MOBS = /^(cow|pig|sheep|chicken|rabbit|mooshroom|cod|salmon|tropical_fish)$/
+
+// nearest dry land surface (solid block with air above), within loaded chunks
+function findLand(b) {
+  const p = b.entity.position
+  const spots = b.findBlocks({ matching: bl => LAND.test(bl.name), useExtraInfo: bl => air(b.blockAt(bl.position.offset(0, 1, 0))) && !/water/.test(b.blockAt(bl.position.offset(0, 1, 0))?.name || ''), maxDistance: 64, count: 60 })
+    .filter(v => v.y >= p.y - 12)
+  if (!spots.length) return null
+  const v = spots.sort((x, y) => x.distanceTo(p) - y.distanceTo(p))[0]
+  return { pos: v, dist: Math.round(v.distanceTo(p)), dir: compass(v.x - p.x, v.z - p.z), angle: Math.atan2(v.z - p.z, v.x - p.x) }
+}
+
+function clock(b) {
+  const t = b.time.timeOfDay ?? 0 // 0 = sunrise, 6000 noon, 12000 sunset, 18000 midnight
+  if (t < 11000) return `day (${Math.round((12000 - t) / 1200)} min until sunset)`
+  if (t < 13000) return 'sunset: night is coming, get to base'
+  return `NIGHT, hostile mobs spawn (${Math.round((24000 - t) / 1200)} min until morning)`
+}
+
+// "raw_beef" -> beef; otherwise close names from the registry
+function suggest(b, n) {
+  const all = Object.keys(b.registry.itemsByName)
+  const fixes = [n.replace(/^raw_(beef|porkchop|chicken|mutton|rabbit|cod|salmon)$/, '$1'), n.replace(/^cooked_/, 'cooked_'), n.replace(/s$/, '')]
+  const exact = fixes.find(f => f !== n && b.registry.itemsByName[f])
+  const part = all.filter(x => x.includes(n) || (n.length > 4 && n.includes(x) && x.length > 3)).slice(0, 3)
+  const list = [...new Set([exact, ...part].filter(Boolean))].slice(0, 3)
+  return list.length ? ` Did you mean: ${list.join(', ')}?` : ''
+}
+
+function rememberChest(st, chestBlock, items) {
+  const m = {}
+  for (const i of items) m[i.name] = (m[i.name] || 0) + i.count
+  st.chestSeen = { pos: chestBlock.position, t: Date.now(), items: m }
+}
+const chestText = items => Object.entries(items).map(([n, c]) => c > 1 ? `${n} x${c}` : n).join(', ') || 'empty'
 const RESOURCES = [
   ['logs', n => /_log$/.test(n) && !n.startsWith('stripped')], ['stone', n => n === 'stone' || n === 'deepslate'],
   ['coal_ore', n => /coal_ore$/.test(n)], ['iron_ore', n => /iron_ore$/.test(n)], ['copper_ore', n => /copper_ore$/.test(n)],
@@ -26,14 +64,23 @@ const RESOURCES = [
 function observe(b, st, cfg, home) {
   const e = b.entity, p = e.position
   const lines = []
-  lines.push(`Time: ${b.time.isDay ? 'day' : 'NIGHT (hostile mobs spawn)'}${b.isRaining ? ', raining' : ''}. Dimension: ${(b.game.dimension || '').replace('minecraft:', '')}.`)
+  const biome = b.blockAt(p)?.biome?.name
+  lines.push(`Time: ${clock(b)}${b.isRaining ? ', raining' : ''}. Dimension: ${(b.game.dimension || '').replace('minecraft:', '')}${biome ? ', biome ' + biome : ''}.`)
+  // terrain: water / ocean / where the land is
+  const below = b.blockAt(p.offset(0, -1, 0))?.name || ''
+  const water = b.findBlocks({ matching: bl => bl.name === 'water', maxDistance: 6, count: 60 }).length
+  const land = findLand(b); st.land = land
+  if (e.isInWater || /water/.test(below) || water > 40) lines.push(`TERRAIN: you are in open water${/ocean/.test(biome || '') ? ' (ocean)' : ''}. No trees, animals or stone here. ${land ? `Nearest dry land: ${land.dir}, ${land.dist} m away (go_to "${land.pos.x} ${land.pos.y + 1} ${land.pos.z}").` : 'No land in sight within 64 m: explore in one straight direction to find it.'}`)
+  else if (land === null) lines.push('TERRAIN: no dry land surface nearby.')
   lines.push(`You: health ${Math.round(b.health)}/20, food ${b.food}/20, level ${b.experience?.level ?? 0}, at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}, holding ${b.heldItem?.name || 'nothing'}.`)
   const armor = [5, 6, 7, 8].map(s => b.inventory.slots[s]?.name).filter(Boolean)
   lines.push(`Armor: ${armor.join(', ') || 'none'}.`)
   const inv = {}
   for (const i of b.inventory.items()) inv[i.name] = (inv[i.name] || 0) + i.count
   lines.push(`Inventory (${b.inventory.emptySlotCount()} free slots): ${Object.entries(inv).map(([n, c]) => c > 1 ? `${n} x${c}` : n).join(', ') || 'empty'}.`)
-  if (home) lines.push(`Base: ${home.x} ${home.y} ${home.z} (${near(b, new Vec3(home.x, home.y, home.z))} m away).`)
+  const hasFood = b.inventory.items().some(i => b.registry.foodsByName[i.name])
+  if (b.food <= 8 && !hasFood) lines.push(`HUNGRY (${b.food}/20) and NO FOOD. Get food: kill animals (cow, pig, sheep, chicken, rabbit, or fish cod/salmon in water) and cook the meat, harvest crops, or break oak leaves for apples. If there are no animals here, move to land/grass areas.`)
+  if (home) { const hv = new Vec3(home.x, home.y, home.z); lines.push(`Base: ${home.x} ${home.y} ${home.z} (${near(b, hv)} m ${compass(home.x - p.x, home.z - p.z)}).`) }
   else lines.push('Base: not set (use set_base where you want to live).')
   const res = []
   for (const [name, test] of RESOURCES) {
@@ -44,11 +91,15 @@ function observe(b, st, cfg, home) {
   const ents = Object.values(b.entities).filter(x => x !== e && x.position.distanceTo(p) < 32)
   const group = list => { const m = {}; for (const x of list) { const n = x.username || x.name; m[n] = Math.min(m[n] ?? 99, near(b, x.position)) } return Object.entries(m).map(([n, d]) => `${n} (${d} m)`).join(', ') }
   lines.push(`Players: ${group(ents.filter(x => x.type === 'player')) || 'none nearby'}. Online: ${Object.keys(b.players).filter(n => n !== b.username).join(', ') || 'nobody'}.`)
-  lines.push(`Hostile mobs: ${group(ents.filter(x => x.type === 'hostile')) || 'none'}. Animals: ${group(ents.filter(x => /^(cow|pig|sheep|chicken|rabbit|mooshroom|horse)$/.test(x.name))) || 'none'}.`)
+  lines.push(`Hostile mobs: ${group(ents.filter(x => x.type === 'hostile')) || 'none'}. Food animals: ${group(ents.filter(x => FOOD_MOBS.test(x.name))) || 'none'}.`)
+  if (st.chestSeen) lines.push(`Chest at ${st.chestSeen.pos.x} ${st.chestSeen.pos.y} ${st.chestSeen.pos.z} (looked ${Math.round((Date.now() - st.chestSeen.t) / 60000)} min ago): ${chestText(st.chestSeen.items)}.`)
+  else if (b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })) lines.push('There is a chest nearby; you have not looked inside yet (use look_in_chest).')
   const places = S.places.filter(pl => pl.server === serverKey(cfg.host, cfg.port)).map(pl => `${pl.name} (${pl.x} ${pl.y} ${pl.z})`)
   if (places.length) lines.push(`Saved places: ${places.join(', ')}.`)
   lines.push(`Your goal: ${cfg.set?.goal || S.set.goal || 'survive and progress: wooden then stone tools, a base with a chest and bed, iron tools and armor, a farm'}.`)
   if (st.aiNotes) lines.push(`Your notes: ${st.aiNotes}`)
+  const blocked = Object.entries(st.aiFails || {}).filter(([, f]) => f.n >= 2 && Date.now() - f.t < 10 * 60e3).map(([k, f]) => `${k} (${f.reason})`)
+  if (blocked.length) lines.push('DO NOT try these again, they keep failing:\n' + blocked.map(x => '- ' + x).join('\n'))
   const hist = (st.aiHistory || []).slice(-8)
   lines.push('Recent actions:' + (hist.length ? '\n' + hist.map(h => `- ${h.action} -> ${h.result}`).join('\n') : ' none yet.'))
   return lines.join('\n')
@@ -68,12 +119,13 @@ const TOOLS = [
   tool('work_on_base', 'Let the built-in routine do the next steps of setting up the base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot. Good when you just want the base built.'),
   tool('go_to', 'Walk somewhere: "base", a saved place name, a player name, or coordinates "x y z".', { target: str('base | place name | player name | "x y z"') }, ['target']),
   tool('explore', 'Walk out to find new resources.', { direction: str('north, south, east, west or any', { enum: ['north', 'south', 'east', 'west', 'any'] }), distance: int('blocks', 15, 80) }, ['direction']),
-  tool('hunt', 'Kill an animal for food or materials (sheep give wool for a bed, cows give leather).', { animal: str('cow, pig, sheep, chicken, rabbit or any') }, ['animal']),
+  tool('hunt', 'Kill an animal for food or materials (sheep give wool for a bed, cows give leather). In water you can catch cod or salmon.', { animal: str('cow, pig, sheep, chicken, rabbit, cod, salmon or any') }, ['animal']),
   tool('fight', 'Attack the nearest hostile mob (zombie, skeleton, spider...). Avoid creepers.', { mob: str('mob name or any') }),
   tool('eat', 'Eat the best food you carry.'),
   tool('sleep', 'Sleep in a bed within 24 m (only works at night). Also sets your respawn point.'),
   tool('equip', 'Hold an item or wear armor.', { item: str('item name') }, ['item']),
   tool('store_items', 'Put items into the nearest chest (within 24 m). Keeps tools, weapons, armor, food and torches.', { keep: { type: 'array', items: { type: 'string' }, description: 'extra item names to keep' } }),
+  tool('look_in_chest', 'Open the nearest chest (within 24 m) and see what is inside.'),
   tool('take_items', 'Take items out of the nearest chest.', { item: str('item name'), count: int('how many', 1, 64) }, ['item']),
   tool('place_block', 'Place a block from your inventory next to you (e.g. crafting_table, furnace, chest, torch, a bed, cobblestone).', { item: str('item name') }, ['item']),
   tool('set_base', 'Make where you are standing your base (home for sleeping, storage and building).'),
@@ -92,6 +144,13 @@ How to play well:
 - Item names are exact Minecraft ids (white_wool, oak_planks, raw_iron, cobblestone).
 - If an action failed, read why and fix the cause instead of repeating it (e.g. craft a crafting table, gather the missing material, explore to find a resource).
 - You can only do what the tools allow; reflexes like eating when starving and fleeing creepers happen automatically.
+Common sense rules:
+- Never repeat an action that just failed the same way. Change something: different item, place, or a step that fixes the cause.
+- You only know what the report says. Don't guess what's in a chest: use look_in_chest.
+- In water / ocean: there is nothing to gather or hunt. First get to dry land (the report gives the direction); fish (cod, salmon) are the only food there.
+- Hungry with no food: hunt the nearest food animal; if none, go to land/grassland and explore there; cook meat in a furnace when you can. Don't keep searching the chest.
+- No trees / stone nearby: explore in ONE straight direction (40-80 blocks) instead of random short walks, and keep going the same way if it keeps being empty.
+- Be at base before night; sleep in a bed if you have one.
 Use the plan field now and then to keep short notes of your current plan. Call one tool only, no extra text.`
 
 // ---------- carrying out actions ----------
@@ -137,7 +196,7 @@ function missingFor(b, itemId, table) {
 const ACTIONS = {
   async gather(b, st, { block, count: n = 8 }) {
     const key = name(block), test = CATS[key] || (x => x === key || x === 'deepslate_' + key)
-    if (!CATS[key] && !b.registry.blocksByName[key]) throw new Error(`unknown block "${block}"`)
+    if (!CATS[key] && !b.registry.blocksByName[key]) throw new Error(`unknown block "${block}" (use logs, stone, or an exact block id like coal_ore)`)
     const before = b.inventory.items().reduce((s, i) => s + i.count, 0)
     for (let i = 0; i < n && !st.abort; i++) {
       if (!b.findBlock({ matching: x => test(x.name), maxDistance: 40 })) { if (i === 0) throw new Error(`no ${key} within 40 m, explore first`); break }
@@ -147,7 +206,7 @@ const ACTIONS = {
   },
   async craft(b, st, { item, count: n = 1 }) {
     const it = itemName(b, item, false), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}"`)
+    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
     if (/_planks$/.test(it)) { await planks(b, count(b, /_planks$/) + n); return `now have ${count(b, it)} ${it}` }
     await wait(300) // let the inventory catch up after the last action
     const tryCraft = async () => {
@@ -167,7 +226,7 @@ const ACTIONS = {
   },
   async smelt(b, st, { item, count: n = 1 }) {
     const it = itemName(b, item), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}"`)
+    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
     n = Math.min(n, count(b, it)); if (!n) throw new Error(`you have no ${it}`)
     let fb = b.findBlock({ matching: b.registry.blocksByName.furnace.id, maxDistance: 24 })
     if (!fb) {
@@ -208,15 +267,20 @@ const ACTIONS = {
     return `arrived (${near(b, new Vec3(pos.x, pos.y, pos.z))} m from target)`
   },
   async explore(b, st, { direction = 'any', distance = 40 }) {
-    const a = { east: 0, south: Math.PI / 2, west: Math.PI, north: -Math.PI / 2 }[direction] ?? Math.random() * Math.PI * 2
+    // "any" while in water heads for the nearest land; otherwise keep the last direction so it doesn't zig-zag
+    let a = { east: 0, south: Math.PI / 2, west: Math.PI, north: -Math.PI / 2 }[direction]
+    if (a === undefined) a = st.land && (b.entity.isInWater || st.land.dist > 8) ? st.land.angle : st.exploreAngle ?? Math.random() * Math.PI * 2
+    st.exploreAngle = a
     const p = b.entity.position, from = p.clone()
     await goto(b, new goals.GoalNearXZ(p.x + Math.cos(a) * distance, p.z + Math.sin(a) * distance, 4), ACTION_MS).catch(() => {})
-    return `walked ${Math.round(b.entity.position.distanceTo(from))} m ${direction}`
+    const moved = Math.round(b.entity.position.distanceTo(from))
+    if (moved > distance * 3) return `you were teleported or respawned, now at ${b.entity.position.floored()}`
+    return `walked ${moved} m ${direction === 'any' ? compass(Math.cos(a), Math.sin(a)) : direction}`
   },
   async hunt(b, st, { animal = 'any' }) {
     const a = name(animal)
-    const prey = b.nearestEntity(x => (a === 'any' ? /^(cow|pig|sheep|chicken|rabbit|mooshroom)$/.test(x.name) : x.name === a) && x.position.distanceTo(b.entity.position) < 40)
-    if (!prey) throw new Error(`no ${a === 'any' ? 'animals' : a} within 40 m`)
+    const prey = b.nearestEntity(x => (a === 'any' ? FOOD_MOBS.test(x.name) : x.name === a) && x.position.distanceTo(b.entity.position) < 40)
+    if (!prey) throw new Error(`no ${a === 'any' ? 'food animals' : a} within 40 m${st.land === null || b.entity.isInWater ? ' (you are probably in water/ocean: go to land)' : ''}`)
     await hunt(b, st, prey)
     return `killed a ${prey.name}`
   },
@@ -267,19 +331,29 @@ const ACTIONS = {
         if (keepSet.has(i.name) || /_(pickaxe|axe|sword|shovel|hoe|helmet|chestplate|leggings|boots)$|^torch$|^shield$/.test(i.name) || b.registry.foodsByName[i.name]) continue
         await box.deposit(i.type, null, i.count).then(() => n += i.count, () => {})
       }
+      rememberChest(st, chest, box.containerItems())
     } finally { box.close() }
     st.count('stored'); return `stored ${n} items`
   },
+  async look_in_chest(b, st) {
+    const chest = b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })
+    if (!chest) throw new Error('no chest within 24 m')
+    await goto(b, new goals.GoalNear(chest.position.x, chest.position.y, chest.position.z, 2))
+    const box = await b.openContainer(chest)
+    try { rememberChest(st, chest, box.containerItems()) } finally { box.close() }
+    return 'the chest has: ' + chestText(st.chestSeen.items)
+  },
   async take_items(b, st, { item, count: n = 64 }) {
     const it = itemName(b, item, false), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}"`)
+    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
     const chest = b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })
     if (!chest) throw new Error('no chest within 24 m')
     await goto(b, new goals.GoalNear(chest.position.x, chest.position.y, chest.position.z, 2))
     const box = await b.openContainer(chest)
     try {
+      rememberChest(st, chest, box.containerItems())
       const inBox = box.containerItems().filter(i => i.type === info.id).reduce((s, i) => s + i.count, 0)
-      if (!inBox) throw new Error(`no ${it} in the chest`)
+      if (!inBox) throw new Error(`no ${it} in the chest. It has: ${chestText(st.chestSeen.items)}`)
       await box.withdraw(info.id, null, Math.min(n, inBox))
       return `took ${Math.min(n, inBox)} ${it}`
     } finally { box.close() }
@@ -343,6 +417,14 @@ export async function aiPlayStep(b, st, cfg, c, home) {
   if (input.plan) st.aiNotes = String(input.plan).slice(0, 200)
   const label = call.name + (Object.keys(input).filter(k => k !== 'plan').length ? ' ' + JSON.stringify(Object.fromEntries(Object.entries(input).filter(([k]) => k !== 'plan'))) : '')
   st.task = 'AI: ' + label.slice(0, 80)
+  // the same action failed twice recently: don't run it again, tell the AI to change course
+  const key = label.replace(/^(\w+) /, '$1 ')
+  st.aiFails ||= {}
+  const fail = st.aiFails[key]
+  if (fail && fail.n >= 2 && Date.now() - fail.t < 10 * 60e3) {
+    remember(st, label, `blocked: already failed ${fail.n} times (${fail.reason}). Do something different.`)
+    return true
+  }
   if (!st.survMoves) { b.pathfinder.setMovements(survivalMoves(b, home)); st.survMoves = true } // may dig and pillar
   st.abort = false; st.aiRunning = true
   let timer
@@ -352,8 +434,11 @@ export async function aiPlayStep(b, st, cfg, c, home) {
       new Promise((_, no) => { timer = setTimeout(() => { st.abort = true; b.pathfinder.stop(); no(new Error('took too long, stopped')) }, ACTION_MS) }),
     ])
     remember(st, label, 'ok: ' + result)
+    delete st.aiFails[key]
   } catch (e) {
-    remember(st, label, 'failed: ' + (st.abort && !/too long/.test(e.message) ? 'interrupted (danger nearby)' : e.message || e))
+    const why = st.abort && !/too long/.test(e.message) ? 'interrupted (danger nearby)' : String(e.message || e)
+    remember(st, label, 'failed: ' + why)
+    if (!/interrupted/.test(why)) { const f = st.aiFails[key] || { n: 0 }; st.aiFails[key] = { n: f.n + 1, t: Date.now(), reason: why.slice(0, 80) } }
   } finally { clearTimeout(timer); st.aiRunning = false; st.abort = false }
   return true
 }

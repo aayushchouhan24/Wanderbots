@@ -54,7 +54,7 @@ export function start(id) {
       conn = { host: via.VIA.host, port: via.VIA.port, fakeHost: via.route(cfg.host, cfg.port, srv.target) }
       st.via = true
     }
-    const b = mineflayer.createBot({ ...conn, username: cfg.name, version, auth: 'offline', viewDistance: eff(cfg).view, hideErrors: true })
+    const b = mineflayer.createBot({ ...conn, username: cfg.name, version, auth: 'offline', viewDistance: cfg.mode === 'ai' && eff(cfg).view === 'tiny' ? 'short' : eff(cfg).view, hideErrors: true })
     st.bot = b; st.task = 'joining'; st.busy = false
     tickEnd(b, version)
     b.loadPlugin(pathfinder)
