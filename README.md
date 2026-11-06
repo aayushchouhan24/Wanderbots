@@ -23,8 +23,8 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 ## Quick start
 
 ```bash
-git clone https://github.com/<you>/wanderbots.git
-cd wanderbots
+git clone https://github.com/aayushchouhan24/Wanderbots.git
+cd Wanderbots
 npm install
 cp .env.example .env   # then edit .env
 npm start
