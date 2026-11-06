@@ -7,6 +7,8 @@ import { think, rnd, homeOf } from './brain.js'
 import { attachChat, log, say } from './chat.js'
 import { tickEnd } from './fixes.js'
 import * as via from './viaproxy.js'
+import { initMcData } from './mc/mcdata.js'
+import { stopAI } from './aiplay.js'
 
 const { pathfinder, Movements } = pf
 export const live = new Map() // bot id -> runtime state
@@ -22,7 +24,7 @@ export function setMode(id, patch) {
   for (const k of ['at', 'spot', 'follow']) if (cfg[k] == null) delete cfg[k]
   save()
   const st = live.get(id)
-  if (st?.bot?.pathfinder) { st.bot.pathfinder.stop(); st.following = null; st.busy = false; log(st, 'event', 'mode → ' + cfg.mode) }
+  if (st?.bot?.pathfinder) { if (cfg.mode !== 'ai') stopAI(st); st.bot.pathfinder.stop(); st.following = null; st.busy = false; log(st, 'event', 'mode → ' + cfg.mode) }
 }
 
 export function start(id) {
@@ -58,6 +60,7 @@ export function start(id) {
     st.bot = b; st.task = 'joining'; st.busy = false
     tickEnd(b, version)
     b.loadPlugin(pathfinder)
+    initMcData(b) // pvp, collectblock, armor manager + game data for Mindcraft's skills
     attachChat(b, st, cfg, { setMode: p => setMode(id, p) })
     let brain
 

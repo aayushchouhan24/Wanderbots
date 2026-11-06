@@ -9,7 +9,13 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 - **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
 - **Any version.** Each bot pings its server and joins with the matching version. Versions 1.8.8 to 26.1 connect directly. Newer servers (26.2, 26.3, …) go through a built-in [ViaProxy](https://github.com/ViaVersion/ViaProxy), started automatically only when needed.
 - **Modes per bot.**
-  - **AI plays (Claude):** Claude decides every step. It gets a short report (health, food, inventory, nearby trees, stone, ores, crafting tables, furnaces and chests, mobs, players, base, its last actions and their results, and its goal) and picks one action: gather, craft, smelt, work on the base, go to, explore, hunt, fight, eat, sleep, equip, store or take items, place a block, set base, follow, chat or wait. The bot carries it out and reports back what worked or why it failed. Reflexes (eating, fleeing creepers, fighting back, getting items back) stay local and instant. It works towards a goal you set per bot, and there's an hourly cap on decisions. At the cap it falls back to the Survival routine.
+  - **AI plays (Claude):** built on [Mindcraft](https://github.com/mindcraft-bots/mindcraft)'s skills library, modes and command set. Claude plays like Mindcraft's agent:
+    - It sees its stats and inventory and calls one command at a time: collect blocks, craft, smelt, search for blocks or entities, go to places or players, use chests, fight, sleep, dig down, go to the surface, trade with villagers and more. It also has queries such as nearby blocks, craftable items and full crafting plans.
+    - It reads each command's output and keeps going towards its goal.
+    - It keeps a short memory summary that survives restarts.
+    - It answers players in chat.
+    - Mindcraft's modes run in the background: self-preservation (drowning, lava, fire, falling sand, low health), getting unstuck, self-defense, hunting, item collecting, torch placing, elbow room and idle staring.
+    - There's an hourly cap on AI decisions. At the cap it plays with the built-in Survival routine.
   - **Auto:** plays by itself. It picks what to do like a player would: building up its base, farming, exploring, hanging out with nearby players or relaxing. It goes home at night. This is rule-based, with no AI model and almost no extra CPU or RAM.
   - **Roam:** wanders freely.
   - **Stay:** hangs around a place, a spot or exact x y z.
@@ -97,7 +103,8 @@ src/
   brain.js     modes and "real player" behaviour, runs about once a second
   chat.js      chat log, replies, greetings, owner commands
   ai.js        Claude calls (Bedrock or the Anthropic API) and AI chat replies
-  aiplay.js    "AI plays" mode: situation report, action tools, executor
+  aiplay.js    "AI plays" mode: Claude + Mindcraft command set, memory, chat
+  mc/          adapted from Mindcraft: skills, world, game data, modes, action manager
   survival.js  survival play: gather, craft, store, build a base
   fixes.js     protocol fixes (tick_end)
   viaproxy.js  starts ViaProxy for servers newer than 26.1
@@ -151,9 +158,13 @@ Add player names to **Owners** in the panel. Those players can then type these i
 | `!status`        | replies with health, food, position and activity   |
 | `!help`          | lists the commands                                 |
 
+## Credits
+
+The "AI plays" mode uses code adapted from [Mindcraft](https://github.com/mindcraft-bots/mindcraft) by Kolby Nottingham and contributors (MIT License): the skills library, world and game-data helpers, modes and action manager in `src/mc/`, and the command set and prompts in `src/aiplay.js`. The license is in `src/mc/LICENSE-mindcraft`.
+
 ## AI plays: speed and cost
 
-Each decision takes about 1-3 seconds, then the bot does the action (walking, digging, crafting). In tests that was about one decision every 10 seconds. With Claude Haiku 4.5 on Bedrock a decision costs roughly $0.002-0.003, and the default cap of 60 per hour is about $0.15 per bot per hour. Haiku 5.5 is cheaper and faster, and is used automatically once it's enabled in your Bedrock account. AI plays uses the same provider settings as AI chat.
+Each decision takes about 1-3 seconds, then the bot does the action (walking, digging, crafting). In tests that was about one decision every 10 seconds. With Claude Haiku 4.5 on Bedrock a decision costs roughly $0.002-0.003, and the default cap of 120 per hour is about $0.30 per bot per hour. Haiku 5.5 is cheaper and faster, and is used automatically once it's enabled in your Bedrock account. AI plays uses the same provider settings as AI chat.
 
 ## AI chat setup
 

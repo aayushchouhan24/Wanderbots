@@ -4,7 +4,7 @@ import pf from 'mineflayer-pathfinder'
 import { Vec3 } from 'vec3'
 import { S, eff, save } from './store.js'
 import { survive, goto } from './survival.js'
-import { aiPlayStep } from './aiplay.js'
+import { ensureAI, stopAI } from './aiplay.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -108,6 +108,10 @@ export async function think(b, st, cfg) {
   // distance walked (ignore teleports)
   if (st.last) { const d = e.position.distanceTo(st.last); if (d < 10) st.count('walked', d) }
   st.last = e.position.clone()
+
+  // AI plays: Claude + Mindcraft's skills and modes take over completely
+  if (mode === 'ai') { ensureAI(b, st, cfg, c, home); st.busy = false; return }
+  if (st.ai) { stopAI(st); st.moves?.() }
 
   if (e.isInWater) b.setControlState('jump', true) // swim up, don't drown
   else if (st.swim) b.setControlState('jump', false)

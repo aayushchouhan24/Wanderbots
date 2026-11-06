@@ -2,6 +2,7 @@
 import { S, save, newId, eff } from './store.js'
 import { rnd } from './brain.js'
 import { aiReply, aiReady } from './ai.js'
+import { inbox } from './aiplay.js'
 
 const pick = a => a[Math.floor(Math.random() * a.length)]
 const REPLY = ['hi', 'hey', 'yo', 'sup', 'hello :)', 'hm?', "what's up", 'yeah?', 'hey there']
@@ -46,6 +47,7 @@ export function attachChat(b, st, cfg, { setMode }) {
     const c = eff(cfg), now = Date.now(), named = lower.includes(b.username.toLowerCase())
     st.convo ||= {}
     const talking = named || now - (st.convo[user] || 0) < 60e3 // keeps talking to someone for a minute after they started
+    if (cfg.mode === 'ai' && (talking || Object.keys(b.players).length <= 3)) { st.convo[user] = now; inbox(st, `${user} says in chat: ${msg}`); return }
     if (c.ai && aiReady() && talking && now - (st.aiAt || 0) > 4000) {
       st.aiCalls = (st.aiCalls || []).filter(t => now - t < 3600e3)
       if (st.aiCalls.length < c.aiMax) {

@@ -1,444 +1,283 @@
-// "AI plays" mode: Claude decides what to do next, the bot carries it out.
-// Each step: build a short report of the bot's situation -> Claude picks ONE action (a tool call)
-// -> run it with a time limit -> remember the result for the next step.
-// Fast reflexes (eating, fleeing creepers, fighting, getting items back) stay in brain.js.
-import pf from 'mineflayer-pathfinder'
-import { Vec3 } from 'vec3'
+// "AI plays" mode, built on Mindcraft's skills, modes and command set.
+// Claude talks to the bot like Mindcraft's agent: it sees a status report, calls one command (tool) at a time,
+// gets the command's output back, and keeps going towards its goal (self-prompting). Mindcraft's modes
+// (self-preservation, unstuck, self-defense, hunting, item collecting, torches, ...) run in the background
+// and interrupt actions when needed; the AI is told when that happens.
+// Commands, queries and prompts adapted from Mindcraft (https://github.com/mindcraft-bots/mindcraft),
+// src/agent/commands/actions.js, queries.js and profiles/defaults/_default.json.
+// Copyright (c) 2024 Kolby Nottingham. MIT License, see src/mc/LICENSE-mindcraft.
 import { S, save, serverKey } from './store.js'
 import { aiCall } from './ai.js'
 import { say } from './chat.js'
-import { goto, gather, craft, planks, placeAt, hunt, count, has, air, survive, survivalMoves } from './survival.js'
+import { survive } from './survival.js'
+import * as skills from './mc/skills.js'
+import * as world from './mc/world.js'
+import * as mc from './mc/mcdata.js'
+import { McAgent } from './mc/agent.js'
 
-const { goals } = pf
 const wait = ms => new Promise(r => setTimeout(r, ms))
-const near = (b, pos) => Math.round(b.entity.position.distanceTo(pos))
-const ACTION_MS = 90e3
+const MAX_MSGS = 24           // conversation turns kept before older ones are folded into memory
+const DEFAULT_GOAL = 'Play survival and progress: get wood and stone tools, build a base with a chest, bed and shelter, get food, then iron tools and armor, then diamonds.'
 
-// ---------- what the bot can see ----------
-const COMPASS = ['east', 'south-east', 'south', 'south-west', 'west', 'north-west', 'north', 'north-east'] // minecraft: -z is north
-const compass = (dx, dz) => COMPASS[(Math.round(Math.atan2(dz, dx) / (Math.PI / 4)) + 8) % 8]
-const LAND = /^(grass_block|dirt|coarse_dirt|podzol|mycelium|sand|red_sand|gravel|stone|snow_block|moss_block|mud|clay|terracotta)$/
-const FOOD_MOBS = /^(cow|pig|sheep|chicken|rabbit|mooshroom|cod|salmon|tropical_fish)$/
-
-// nearest dry land surface (solid block with air above), within loaded chunks
-function findLand(b) {
-  const p = b.entity.position
-  const spots = b.findBlocks({ matching: bl => LAND.test(bl.name), useExtraInfo: bl => air(b.blockAt(bl.position.offset(0, 1, 0))) && !/water/.test(b.blockAt(bl.position.offset(0, 1, 0))?.name || ''), maxDistance: 64, count: 60 })
-    .filter(v => v.y >= p.y - 12)
-  if (!spots.length) return null
-  const v = spots.sort((x, y) => x.distanceTo(p) - y.distanceTo(p))[0]
-  return { pos: v, dist: Math.round(v.distanceTo(p)), dir: compass(v.x - p.x, v.z - p.z), angle: Math.atan2(v.z - p.z, v.x - p.x) }
+// ---------- queries: like Mindcraft's !stats, !inventory, !nearbyBlocks, !craftable, !entities ----------
+function stats(b, agent) {
+  const p = b.entity.position, t = b.time.timeOfDay
+  let r = `STATS\n- Position: x: ${p.x.toFixed(1)}, y: ${p.y.toFixed(1)}, z: ${p.z.toFixed(1)}\n- Gamemode: ${b.game.gameMode}\n- Health: ${Math.round(b.health)} / 20\n- Hunger: ${Math.round(b.food)} / 20`
+  r += `\n- Biome: ${world.getBiomeName(b)}\n- Weather: ${b.thunderState > 0 ? 'Thunderstorm' : b.rainState > 0 ? 'Rain' : 'Clear'}`
+  r += `\n- Time: ${t < 6000 ? 'Morning' : t < 12000 ? 'Afternoon' : t < 13000 ? 'Sunset (night soon)' : 'Night'}`
+  r += `\n- Current action: ${agent.isIdle() ? 'Idle' : agent.actions.currentActionLabel}`
+  const players = world.getNearbyPlayerNames(b)
+  r += `\n- Nearby players: ${players.length ? players.join(', ') : 'none'}`
+  return r
+}
+function inventory(b) {
+  const inv = world.getInventoryCounts(b)
+  const r = 'INVENTORY' + (Object.keys(inv).length ? Object.entries(inv).filter(([, c]) => c > 0).map(([n, c]) => `\n- ${n}: ${c}`).join('') : ': Nothing')
+  const wear = [['Head', 5], ['Torso', 6], ['Legs', 7], ['Feet', 8]].map(([k, s]) => b.inventory.slots[s] && `${k}: ${b.inventory.slots[s].name}`).filter(Boolean)
+  return r + '\nWEARING: ' + (wear.join(', ') || 'Nothing')
+}
+function nearbyBlocks(b) {
+  const names = [...new Set(world.getNearestBlocks(b).map(bl => bl.name))]
+  if (!names.length) return 'NEARBY_BLOCKS: none'
+  return 'NEARBY_BLOCKS\n- ' + names.join('\n- ') + '\n- ' + world.getSurroundingBlocks(b).join('\n- ') + `\n- First solid block above head: ${world.getFirstBlockAboveHead(b, null, 32)}`
+}
+function entities(b) {
+  const counts = {}
+  for (const e of world.getNearbyEntities(b)) if (e.type !== 'player' && e.name !== 'item') counts[e.name] = (counts[e.name] || 0) + 1
+  const players = world.getNearbyPlayerNames(b)
+  const lines = players.map(p => `\n- Player: ${p}`).join('') + Object.entries(counts).map(([n, c]) => `\n- ${n}: ${c}`).join('')
+  return 'NEARBY_ENTITIES' + (lines || ': none')
+}
+function craftable(b) {
+  const list = world.getCraftableItems(b)
+  return 'CRAFTABLE_ITEMS' + (list.length ? list.map(i => `\n- ${i}`).join('') : ': none')
 }
 
-function clock(b) {
-  const t = b.time.timeOfDay ?? 0 // 0 = sunrise, 6000 noon, 12000 sunset, 18000 midnight
-  if (t < 11000) return `day (${Math.round((12000 - t) / 1200)} min until sunset)`
-  if (t < 13000) return 'sunset: night is coming, get to base'
-  return `NIGHT, hostile mobs spawn (${Math.round((24000 - t) / 1200)} min until morning)`
-}
+// ---------- commands (tools) ----------
+// params: [name, type, description]; types: string | int | float | boolean
+const P = (name, type, description) => ({ name, type, description })
+const T = { string: 'string', int: 'integer', float: 'number', boolean: 'boolean' }
+const OPTIONAL = /^(closeness|follow_dist|search_range|num|quantity|seconds|count|distance)$/
 
-// "raw_beef" -> beef; otherwise close names from the registry
-function suggest(b, n) {
-  const all = Object.keys(b.registry.itemsByName)
-  const fixes = [n.replace(/^raw_(beef|porkchop|chicken|mutton|rabbit|cod|salmon)$/, '$1'), n.replace(/^cooked_/, 'cooked_'), n.replace(/s$/, '')]
-  const exact = fixes.find(f => f !== n && b.registry.itemsByName[f])
-  const part = all.filter(x => x.includes(n) || (n.length > 4 && n.includes(x) && x.length > 3)).slice(0, 3)
-  const list = [...new Set([exact, ...part].filter(Boolean))].slice(0, 3)
-  return list.length ? ` Did you mean: ${list.join(', ')}?` : ''
-}
+const COMMANDS = [
+  // queries
+  { name: 'stats', description: "Get your location, health, hunger, biome, weather, time of day and current action.", run: (b, a) => stats(b, a) },
+  { name: 'inventory', description: "Get your inventory and what you are wearing.", run: b => inventory(b) },
+  { name: 'nearbyBlocks', description: 'Get the blocks near you.', run: b => nearbyBlocks(b) },
+  { name: 'craftable', description: "Get the items you can craft with your inventory right now.", run: b => craftable(b) },
+  { name: 'entities', description: 'Get nearby players and entities.', run: b => entities(b) },
+  { name: 'savedPlaces', description: 'List saved locations.', run: (b, a, x, ctx) => 'SAVED_PLACES: ' + (placesFor(ctx.cfg).map(p => `${p.name} (${p.x}, ${p.y}, ${p.z})`).join(', ') || 'none') },
+  { name: 'getCraftingPlan', description: "Get a full crafting plan for an item: ingredients, quantities, and what is missing from your inventory.",
+    params: [P('targetItem', 'string', 'The item to craft'), P('quantity', 'int', 'How many')],
+    run: (b, a, { targetItem, quantity = 1 }) => mc.getDetailedCraftingPlan(targetItem, quantity, world.getInventoryCounts(b)) },
+  { name: 'modes', description: 'List the automatic behaviour modes and whether they are on.', run: b => b.modes.getDocs() },
 
-function rememberChest(st, chestBlock, items) {
-  const m = {}
-  for (const i of items) m[i.name] = (m[i.name] || 0) + i.count
-  st.chestSeen = { pos: chestBlock.position, t: Date.now(), items: m }
-}
-const chestText = items => Object.entries(items).map(([n, c]) => c > 1 ? `${n} x${c}` : n).join(', ') || 'empty'
-const RESOURCES = [
-  ['logs', n => /_log$/.test(n) && !n.startsWith('stripped')], ['stone', n => n === 'stone' || n === 'deepslate'],
-  ['coal_ore', n => /coal_ore$/.test(n)], ['iron_ore', n => /iron_ore$/.test(n)], ['copper_ore', n => /copper_ore$/.test(n)],
-  ['gold_ore', n => /gold_ore$/.test(n)], ['diamond_ore', n => /diamond_ore$/.test(n)], ['sand', n => n === 'sand'],
-  ['water', n => n === 'water'], ['lava', n => n === 'lava'], ['crafting_table', n => n === 'crafting_table'],
-  ['furnace', n => n === 'furnace'], ['chest', n => n === 'chest'], ['bed', n => /_bed$/.test(n)], ['ripe_crops', null],
+  // actions
+  { name: 'stop', description: 'Stop the current action.', run: async (b, a) => { await a.actions.stop(); return 'Stopped.' } },
+  { name: 'goToPlayer', description: 'Go to the given player.', params: [P('player_name', 'string', 'Player name'), P('closeness', 'float', 'How close to get')], act: (b, { player_name, closeness = 3 }) => skills.goToPlayer(b, player_name, closeness) },
+  { name: 'followPlayer', description: 'Follow the given player (up to 2 minutes).', params: [P('player_name', 'string', 'Player to follow'), P('follow_dist', 'float', 'Distance to follow from')], timeout: 2, act: (b, { player_name, follow_dist = 4 }) => skills.followPlayer(b, player_name, follow_dist) },
+  { name: 'goToCoordinates', description: 'Go to the given x, y, z location.', params: [P('x', 'float', 'x'), P('y', 'float', 'y'), P('z', 'float', 'z'), P('closeness', 'float', 'How close to get')], act: (b, { x, y, z, closeness = 2 }) => skills.goToPosition(b, x, y, z, closeness) },
+  { name: 'searchForBlock', description: 'Find and go to the nearest block of a given type within a range (min 32).', params: [P('type', 'string', 'Block type, e.g. oak_log, iron_ore'), P('search_range', 'float', 'Search range, 32-512')], act: (b, { type, search_range = 64 }) => skills.goToNearestBlock(b, type, 4, Math.max(32, search_range)) },
+  { name: 'searchForEntity', description: 'Find and go to the nearest entity of a given type within a range.', params: [P('type', 'string', 'Entity type, e.g. cow, sheep, villager'), P('search_range', 'float', 'Search range, 32-512')], act: (b, { type, search_range = 64 }) => skills.goToNearestEntity(b, type, 4, Math.max(32, search_range)) },
+  { name: 'moveAway', description: 'Move away from the current location in any direction by a given distance.', params: [P('distance', 'float', 'Distance')], act: (b, { distance = 10 }) => skills.moveAway(b, distance) },
+  { name: 'rememberHere', description: 'Save the current location with a name.', params: [P('name', 'string', 'Name for the place')], run: (b, a, { name }, ctx) => rememberPlace(b, ctx.cfg, name) },
+  { name: 'goToRememberedPlace', description: 'Go to a saved location.', params: [P('name', 'string', 'Saved place name')], act: (b, { name }, ctx) => { const p = placesFor(ctx.cfg).find(x => x.name.toLowerCase() === String(name).toLowerCase()); if (!p) { skills.log(b, `No location named "${name}" saved.`); return } return skills.goToPosition(b, p.x, p.y, p.z, 1) } },
+  { name: 'givePlayer', description: 'Give an item to a player.', params: [P('player_name', 'string', 'Player'), P('item_name', 'string', 'Item'), P('num', 'int', 'How many')], act: (b, { player_name, item_name, num = 1 }) => skills.giveToPlayer(b, item_name, player_name, num) },
+  { name: 'consume', description: 'Eat or drink the given item.', params: [P('item_name', 'string', 'Item to eat/drink')], act: (b, { item_name }) => skills.consume(b, item_name) },
+  { name: 'equip', description: 'Equip the given item (tool, weapon or armor).', params: [P('item_name', 'string', 'Item')], act: (b, { item_name }) => skills.equip(b, item_name) },
+  { name: 'putInChest', description: 'Put an item in the nearest chest.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many (-1 for all)')], act: (b, { item_name, num = -1 }) => skills.putInChest(b, item_name, num) },
+  { name: 'takeFromChest', description: 'Take an item from the nearest chest.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many (-1 for all)')], act: (b, { item_name, num = -1 }) => skills.takeFromChest(b, item_name, num) },
+  { name: 'viewChest', description: 'View the items in the nearest chest.', act: b => skills.viewChest(b) },
+  { name: 'discard', description: 'Drop an item from the inventory.', params: [P('item_name', 'string', 'Item'), P('num', 'int', 'How many')], act: async (b, { item_name, num = -1 }) => { const s = b.entity.position.clone(); await skills.moveAway(b, 5); await skills.discard(b, item_name, num); await skills.goToPosition(b, s.x, s.y, s.z, 0) } },
+  { name: 'collectBlocks', description: 'Collect (mine/chop) the nearest blocks of a type, picking the right tool. E.g. oak_log, stone, coal_ore, iron_ore, sand.', params: [P('type', 'string', 'Block type'), P('num', 'int', 'How many')], timeout: 10, act: (b, { type, num = 1 }) => skills.collectBlock(b, type, num) },
+  { name: 'craftRecipe', description: 'Craft a recipe a number of times (NOT the number of items: one oak_planks craft makes 4). Places a crafting table from the inventory if one is needed.', params: [P('recipe_name', 'string', 'Output item'), P('num', 'int', 'Times to craft')], act: (b, { recipe_name, num = 1 }) => skills.craftRecipe(b, recipe_name, num) },
+  { name: 'smeltItem', description: 'Smelt an item in a furnace a number of times (uses a nearby furnace or places one from the inventory; uses coal/charcoal/wood as fuel).', params: [P('item_name', 'string', 'Input item, e.g. raw_iron, beef'), P('num', 'int', 'Times to smelt')], timeout: 5, act: (b, { item_name, num = 1 }) => skills.smeltItem(b, item_name, num) },
+  { name: 'clearFurnace', description: 'Take all items out of the nearest furnace.', act: b => skills.clearNearestFurnace(b) },
+  { name: 'placeHere', description: 'Place a single block or torch where you stand. Not for building structures.', params: [P('type', 'string', 'Block/item to place')], act: (b, { type }) => { const p = b.entity.position; return skills.placeBlock(b, type, p.x, p.y, p.z) } },
+  { name: 'attack', description: 'Attack and kill the nearest entity of a type (mob or animal).', params: [P('type', 'string', 'Entity type, e.g. zombie, cow')], act: (b, { type }) => skills.attackNearest(b, type, true) },
+  { name: 'goToBed', description: 'Go to the nearest bed and sleep.', act: b => skills.goToBed(b) },
+  { name: 'stay', description: 'Stay in place for some seconds (pauses modes).', params: [P('seconds', 'int', 'Seconds (max 120)')], act: (b, { seconds = 30 }) => skills.stay(b, Math.min(120, Math.max(1, seconds))) },
+  { name: 'setMode', description: 'Turn an automatic behaviour mode on or off (self_preservation, unstuck, cowardice, self_defense, hunting, item_collecting, torch_placing, elbow_room, idle_staring).', params: [P('mode_name', 'string', 'Mode'), P('on', 'boolean', 'On or off')],
+    run: (b, a, { mode_name, on }) => { if (!b.modes.exists(mode_name) || mode_name === 'cheat') return `Mode ${mode_name} does not exist.`; b.modes.setOn(mode_name, !!on); return `Mode ${mode_name} is now ${on ? 'on' : 'off'}.` } },
+  { name: 'digDown', description: 'Dig straight down a distance. Stops at lava, water or a fall of 4+ blocks.', params: [P('distance', 'int', 'Blocks')], act: (b, { distance = 5 }) => skills.digDown(b, distance) },
+  { name: 'goToSurface', description: 'Move to the highest block above you (usually the surface).', act: b => skills.goToSurface(b) },
+  { name: 'useOn', description: 'Use (right click) a tool on the nearest target: e.g. hoe on dirt, bucket on water, shears on sheep, bone_meal on a crop.', params: [P('tool_name', 'string', 'Tool name or "hand"'), P('target', 'string', 'Entity or block type, or "nothing"')], act: (b, { tool_name, target }) => skills.useToolOn(b, tool_name, target) },
+  { name: 'showVillagerTrades', description: 'Show the trades of a villager (ids are in entities).', params: [P('id', 'int', 'Villager id')], act: (b, { id }) => skills.showVillagerTrades(b, id) },
+  { name: 'tradeWithVillager', description: 'Trade with a villager.', params: [P('id', 'int', 'Villager id'), P('index', 'int', 'Trade number (1-based)'), P('count', 'int', 'Times')], act: (b, { id, index, count = 1 }) => skills.tradeWithVillager(b, id, index, count) },
+  // Wanderbots extras
+  { name: 'workOnBase', description: 'Let the built-in routine do the next steps of setting up your base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot.', timeout: 4,
+    act: async (b, x, ctx) => { for (let i = 0; i < 3 && !b.interrupt_code; i++) { if (await survive(b, ctx.st, ctx.cfg, ctx.c, ctx.home) === 'idle') { skills.log(b, 'The base is finished.'); return } } skills.log(b, ctx.st.task.replace(/^survival: /, 'Base routine: ')) } },
+  { name: 'setBase', description: 'Make where you stand your base (home for sleeping, storage, building).', run: (b, a, x, ctx) => { const p = b.entity.position.floored(); ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; delete ctx.cfg.at; save(); return `Base set at ${p.x} ${p.y} ${p.z}.` } },
+  { name: 'chat', description: 'Say something in the game chat (when talking with players).', params: [P('message', 'string', 'One short line')], run: (b, a, { message }, ctx) => { say(b, ctx.st, String(message || '').slice(0, 200)); return 'Said it.' } },
+  { name: 'goal', description: 'Change your long-term goal.', params: [P('goal', 'string', 'The new goal')], run: (b, a, { goal }, ctx) => { ctx.st.aiGoal = String(goal || '').slice(0, 300); return 'Goal set: ' + ctx.st.aiGoal } },
 ]
+const BY_NAME = Object.fromEntries(COMMANDS.map(c => [c.name, c]))
+const TOOLS = COMMANDS.map(c => ({
+  name: c.name, description: c.description,
+  input_schema: { type: 'object', properties: Object.fromEntries((c.params || []).map(p => [p.name, { type: T[p.type], description: p.description }])), required: (c.params || []).filter(p => !OPTIONAL.test(p.name)).map(p => p.name) },
+}))
 
-function observe(b, st, cfg, home) {
-  const e = b.entity, p = e.position
-  const lines = []
-  const biome = b.blockAt(p)?.biome?.name
-  lines.push(`Time: ${clock(b)}${b.isRaining ? ', raining' : ''}. Dimension: ${(b.game.dimension || '').replace('minecraft:', '')}${biome ? ', biome ' + biome : ''}.`)
-  // terrain: water / ocean / where the land is
-  const below = b.blockAt(p.offset(0, -1, 0))?.name || ''
-  const water = b.findBlocks({ matching: bl => bl.name === 'water', maxDistance: 6, count: 60 }).length
-  const land = findLand(b); st.land = land
-  if (e.isInWater || /water/.test(below) || water > 40) lines.push(`TERRAIN: you are in open water${/ocean/.test(biome || '') ? ' (ocean)' : ''}. No trees, animals or stone here. ${land ? `Nearest dry land: ${land.dir}, ${land.dist} m away (go_to "${land.pos.x} ${land.pos.y + 1} ${land.pos.z}").` : 'No land in sight within 64 m: explore in one straight direction to find it.'}`)
-  else if (land === null) lines.push('TERRAIN: no dry land surface nearby.')
-  lines.push(`You: health ${Math.round(b.health)}/20, food ${b.food}/20, level ${b.experience?.level ?? 0}, at ${Math.round(p.x)} ${Math.round(p.y)} ${Math.round(p.z)}, holding ${b.heldItem?.name || 'nothing'}.`)
-  const armor = [5, 6, 7, 8].map(s => b.inventory.slots[s]?.name).filter(Boolean)
-  lines.push(`Armor: ${armor.join(', ') || 'none'}.`)
-  const inv = {}
-  for (const i of b.inventory.items()) inv[i.name] = (inv[i.name] || 0) + i.count
-  lines.push(`Inventory (${b.inventory.emptySlotCount()} free slots): ${Object.entries(inv).map(([n, c]) => c > 1 ? `${n} x${c}` : n).join(', ') || 'empty'}.`)
-  const hasFood = b.inventory.items().some(i => b.registry.foodsByName[i.name])
-  if (b.food <= 8 && !hasFood) lines.push(`HUNGRY (${b.food}/20) and NO FOOD. Get food: kill animals (cow, pig, sheep, chicken, rabbit, or fish cod/salmon in water) and cook the meat, harvest crops, or break oak leaves for apples. If there are no animals here, move to land/grass areas.`)
-  if (home) { const hv = new Vec3(home.x, home.y, home.z); lines.push(`Base: ${home.x} ${home.y} ${home.z} (${near(b, hv)} m ${compass(home.x - p.x, home.z - p.z)}).`) }
-  else lines.push('Base: not set (use set_base where you want to live).')
-  const res = []
-  for (const [name, test] of RESOURCES) {
-    const found = b.findBlocks({ matching: test ? bl => test(bl.name) : bl => /^(wheat|carrots|potatoes|beetroots)$/.test(bl.name) && bl.getProperties().age >= (bl.name === 'beetroots' ? 3 : 7), maxDistance: 32, count: 40 })
-    if (found.length) res.push(`${name} ${found.length >= 40 ? '40+' : found.length} (nearest ${Math.min(...found.map(v => near(b, v)))} m)`)
-  }
-  lines.push(`Nearby blocks (32 m): ${res.join(', ') || 'nothing notable'}.`)
-  const ents = Object.values(b.entities).filter(x => x !== e && x.position.distanceTo(p) < 32)
-  const group = list => { const m = {}; for (const x of list) { const n = x.username || x.name; m[n] = Math.min(m[n] ?? 99, near(b, x.position)) } return Object.entries(m).map(([n, d]) => `${n} (${d} m)`).join(', ') }
-  lines.push(`Players: ${group(ents.filter(x => x.type === 'player')) || 'none nearby'}. Online: ${Object.keys(b.players).filter(n => n !== b.username).join(', ') || 'nobody'}.`)
-  lines.push(`Hostile mobs: ${group(ents.filter(x => x.type === 'hostile')) || 'none'}. Food animals: ${group(ents.filter(x => FOOD_MOBS.test(x.name))) || 'none'}.`)
-  if (st.chestSeen) lines.push(`Chest at ${st.chestSeen.pos.x} ${st.chestSeen.pos.y} ${st.chestSeen.pos.z} (looked ${Math.round((Date.now() - st.chestSeen.t) / 60000)} min ago): ${chestText(st.chestSeen.items)}.`)
-  else if (b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })) lines.push('There is a chest nearby; you have not looked inside yet (use look_in_chest).')
-  const places = S.places.filter(pl => pl.server === serverKey(cfg.host, cfg.port)).map(pl => `${pl.name} (${pl.x} ${pl.y} ${pl.z})`)
-  if (places.length) lines.push(`Saved places: ${places.join(', ')}.`)
-  lines.push(`Your goal: ${cfg.set?.goal || S.set.goal || 'survive and progress: wooden then stone tools, a base with a chest and bed, iron tools and armor, a farm'}.`)
-  if (st.aiNotes) lines.push(`Your notes: ${st.aiNotes}`)
-  const blocked = Object.entries(st.aiFails || {}).filter(([, f]) => f.n >= 2 && Date.now() - f.t < 10 * 60e3).map(([k, f]) => `${k} (${f.reason})`)
-  if (blocked.length) lines.push('DO NOT try these again, they keep failing:\n' + blocked.map(x => '- ' + x).join('\n'))
-  const hist = (st.aiHistory || []).slice(-8)
-  lines.push('Recent actions:' + (hist.length ? '\n' + hist.map(h => `- ${h.action} -> ${h.result}`).join('\n') : ' none yet.'))
-  return lines.join('\n')
+const placesFor = cfg => S.places.filter(p => p.server === serverKey(cfg.host, cfg.port))
+function rememberPlace(b, cfg, name) {
+  const p = b.entity.position.floored(), n = String(name || '').trim().slice(0, 32)
+  if (!n) return 'Give the place a name.'
+  S.places = S.places.filter(x => !(x.server === serverKey(cfg.host, cfg.port) && x.name.toLowerCase() === n.toLowerCase()))
+  S.places.push({ id: Math.random().toString(16).slice(2, 10), name: n, server: serverKey(cfg.host, cfg.port), x: p.x, y: p.y, z: p.z })
+  save(); return `Location saved as "${n}".`
 }
 
-// ---------- the actions Claude can choose ----------
-const str = (d, extra = {}) => ({ type: 'string', description: d, ...extra })
-const int = (d, min, max) => ({ type: 'integer', description: d, minimum: min, maximum: max })
-const tool = (name, description, props = {}, required = []) => ({
-  name, description,
-  input_schema: { type: 'object', properties: { ...props, plan: str('Optional: replace your notes (your plan / what to remember), max 200 chars.') }, required, additionalProperties: false },
-})
-const TOOLS = [
-  tool('gather', 'Dig/chop the nearest matching blocks and collect the drops. Use "logs" for any tree, "stone" for stone (gives cobblestone, needs a pickaxe), or a block name like "coal_ore", "iron_ore", "sand", "dirt".', { block: str('logs, stone, coal_ore, iron_ore, copper_ore, sand, dirt, gravel, or another block name'), count: int('how many blocks', 1, 16) }, ['block', 'count']),
-  tool('craft', 'Craft an item (e.g. oak_planks, stick, crafting_table, wooden_pickaxe, stone_sword, furnace, chest, torch, iron_pickaxe, iron_chestplate, bread, white_bed). Planks are made from logs automatically. Recipes needing a 3x3 grid need a crafting table within 24 m.', { item: str('item name'), count: int('how many items you want', 1, 64) }, ['item']),
-  tool('smelt', 'Smelt/cook items in a furnace (places one if you carry it). Uses coal, charcoal or wood as fuel. E.g. raw_iron -> iron_ingot, raw_beef -> cooked_beef, sand -> glass.', { item: str('item to put in, e.g. raw_iron'), count: int('how many', 1, 16) }, ['item']),
-  tool('work_on_base', 'Let the built-in routine do the next steps of setting up the base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot. Good when you just want the base built.'),
-  tool('go_to', 'Walk somewhere: "base", a saved place name, a player name, or coordinates "x y z".', { target: str('base | place name | player name | "x y z"') }, ['target']),
-  tool('explore', 'Walk out to find new resources.', { direction: str('north, south, east, west or any', { enum: ['north', 'south', 'east', 'west', 'any'] }), distance: int('blocks', 15, 80) }, ['direction']),
-  tool('hunt', 'Kill an animal for food or materials (sheep give wool for a bed, cows give leather). In water you can catch cod or salmon.', { animal: str('cow, pig, sheep, chicken, rabbit, cod, salmon or any') }, ['animal']),
-  tool('fight', 'Attack the nearest hostile mob (zombie, skeleton, spider...). Avoid creepers.', { mob: str('mob name or any') }),
-  tool('eat', 'Eat the best food you carry.'),
-  tool('sleep', 'Sleep in a bed within 24 m (only works at night). Also sets your respawn point.'),
-  tool('equip', 'Hold an item or wear armor.', { item: str('item name') }, ['item']),
-  tool('store_items', 'Put items into the nearest chest (within 24 m). Keeps tools, weapons, armor, food and torches.', { keep: { type: 'array', items: { type: 'string' }, description: 'extra item names to keep' } }),
-  tool('look_in_chest', 'Open the nearest chest (within 24 m) and see what is inside.'),
-  tool('take_items', 'Take items out of the nearest chest.', { item: str('item name'), count: int('how many', 1, 64) }, ['item']),
-  tool('place_block', 'Place a block from your inventory next to you (e.g. crafting_table, furnace, chest, torch, a bed, cobblestone).', { item: str('item name') }, ['item']),
-  tool('set_base', 'Make where you are standing your base (home for sleeping, storage and building).'),
-  tool('follow_player', 'Follow a player for a while.', { player: str('player name'), seconds: int('how long', 5, 120) }, ['player']),
-  tool('chat', 'Say something in chat (only when a player is around or talked to you).', { message: str('one short line') }, ['message']),
-  tool('wait', 'Stand still for a moment (e.g. waiting for day, crops or health).', { seconds: int('seconds', 3, 30) }),
-]
-
-const SYSTEM = `You control a Minecraft bot playing survival like a real player. Each turn you get a report of its situation and choose exactly ONE action by calling one tool.
-How to play well:
-- Progress: logs -> planks -> crafting table -> wooden pickaxe -> cobblestone -> stone pickaxe, sword, axe -> furnace -> coal + torches -> iron ore -> smelt to iron ingots -> iron pickaxe, sword, armor -> diamonds.
-- Keep a base: chest for storage, a bed (3 wool + 3 planks) for respawning and skipping the night, a shelter.
-- Food: hunt animals and cook the meat, or farm. Eat before food gets low.
-- Night is dangerous: do NOT go gathering or exploring at night. Go to base and sleep if you have a bed; otherwise wait there or do crafting, smelting or storing at base.
-- Be efficient: gather enough in one go (e.g. 8-16 blocks), craft several items at once.
-- Item names are exact Minecraft ids (white_wool, oak_planks, raw_iron, cobblestone).
-- If an action failed, read why and fix the cause instead of repeating it (e.g. craft a crafting table, gather the missing material, explore to find a resource).
-- You can only do what the tools allow; reflexes like eating when starving and fleeing creepers happen automatically.
-Common sense rules:
-- Never repeat an action that just failed the same way. Change something: different item, place, or a step that fixes the cause.
-- You only know what the report says. Don't guess what's in a chest: use look_in_chest.
-- In water / ocean: there is nothing to gather or hunt. First get to dry land (the report gives the direction); fish (cod, salmon) are the only food there.
-- Hungry with no food: hunt the nearest food animal; if none, go to land/grassland and explore there; cook meat in a furnace when you can. Don't keep searching the chest.
-- No trees / stone nearby: explore in ONE straight direction (40-80 blocks) instead of random short walks, and keep going the same way if it keeps being empty.
-- Be at base before night; sleep in a bed if you have one.
-Use the plan field now and then to keep short notes of your current plan. Call one tool only, no extra text.`
-
-// ---------- carrying out actions ----------
-const CATS = { logs: n => /_log$/.test(n) && !n.startsWith('stripped'), stone: n => n === 'stone' || n === 'cobblestone' || n === 'deepslate' || n === 'cobbled_deepslate' }
-const ARMOR_DEST = [[/_helmet$/, 'head'], [/_chestplate$/, 'torso'], [/_leggings$/, 'legs'], [/_boots$/, 'feet']]
-const FUEL = ['coal', 'charcoal', 'coal_block']
-const name = s => String(s || '').trim().toLowerCase().replace(/\s+/g, '_').replace(/^minecraft:/, '')
-const GENERIC = { wool: /_wool$/, planks: /_planks$/, wood: /_planks$/, log: /_log$/, logs: /_log$/, bed: /_bed$/ }
-const GENERIC_DEFAULT = { wool: 'white_wool', planks: 'oak_planks', wood: 'oak_planks', log: 'oak_log', logs: 'oak_log', bed: 'white_bed' }
-function itemName(b, s, fromInventory = true) {
-  const n = name(s); if (!GENERIC[n]) return n
-  const own = fromInventory && b.inventory.items().find(i => GENERIC[n].test(i.name))
-  return own?.name || GENERIC_DEFAULT[n]
+// ---------- prompt ----------
+function system(b, cfg, st) {
+  // stable part first (cached), then goal + memory
+  return [
+    { type: 'text', cache_control: { type: 'ephemeral' }, text:
+`You are an AI Minecraft bot named ${b.username} that can see, move, mine, build, craft and interact with the world by calling commands (tools). You play survival on your own, like a skilled player, and you can talk with players.
+Be efficient: call one command at a time, read its output, then decide the next step. Use query commands (stats, inventory, nearbyBlocks, craftable, entities, getCraftingPlan) when you need information instead of guessing.
+Minecraft knowledge:
+- Progression: collect logs -> craft planks -> crafting_table -> wooden_pickaxe -> collect stone (gives cobblestone) -> stone_pickaxe, stone_sword, stone_axe -> furnace (8 cobblestone) -> coal -> torches -> iron_ore -> smelt raw_iron -> iron tools and armor -> diamonds.
+- Recipe counts: craftRecipe crafts a recipe N times; 1 log = 4 planks; 2 planks = 4 sticks.
+- Food: kill cows, pigs, sheep, chickens (beef, porkchop, mutton, chicken) and cook them in a furnace. Eat before hunger gets low.
+- A bed (3 wool of one colour + 3 planks) lets you sleep and sets your respawn point. Sheep give wool.
+- Night is dangerous: be at your base or in a shelter, place torches, sleep if you have a bed.
+- If you are in water or an ocean, go to land first. Use goToSurface if you are underground.
+- If a command fails, read why and fix the cause (missing material, need a crafting table/furnace, go somewhere else). Never repeat the exact same failing command.
+- Automatic modes protect you (self_preservation, unstuck, self_defense, hunting, item_collecting, torch_placing). If one interrupts you, continue your plan afterwards.
+Talking: if a player talks to you, answer with the chat command, briefly and casually, and help them if they ask. Don't spam chat when nobody is talking to you.` },
+    { type: 'text', text: `Your goal: ${st.aiGoal || cfg.set?.goal || S.set.goal || DEFAULT_GOAL}\nSummarized memory: '${cfg.aiMemory || ''}'` },
+  ]
 }
 
-// spot next to the bot to put a block on (air with solid ground below, not where the bot stands)
-function spotNear(b) {
-  const p = b.entity.position.floored()
-  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1], [1, -1], [-1, 1], [2, 0], [0, 2], [-2, 0], [0, -2]]) {
-    const pos = p.offset(dx, 0, dz)
-    if (air(b.blockAt(pos)) && air(b.blockAt(pos.offset(0, 1, 0))) && b.blockAt(pos.offset(0, -1, 0))?.boundingBox === 'block') return pos
-  }
-  return null
-}
-async function placeNear(b, item) {
-  const pos = spotNear(b); if (!pos) throw new Error('no free spot next to me to place it')
-  if (!await placeAt(b, item, pos)) throw new Error('could not place ' + item)
-  return pos
+// short status the AI gets with every message (like Mindcraft's $STATS / $INVENTORY)
+function status(b, agent, st, cfg) {
+  const home = cfg.spot || (cfg.at && S.places.find(p => p.id === cfg.at))
+  let s = stats(b, agent) + '\n' + inventory(b)
+  if (home) s += `\n- Base: ${home.x} ${home.y} ${home.z}`
+  if (cfg.lastDeath) s += `\n- You died at ${cfg.lastDeath.x} ${cfg.lastDeath.y} ${cfg.lastDeath.z}; your items may still be there (they vanish 5 minutes after death).`
+  return s
 }
 
-function missingFor(b, itemId, table) {
-  const have = id => b.inventory.items().filter(i => i.type === id).reduce((n, i) => n + i.count, 0)
-  const short = r => r.delta.filter(d => d.count < 0).reduce((n, d) => n + Math.max(0, -d.count - have(d.id)), 0)
-  const r = b.recipesAll(itemId, null, table || true).sort((x, y) => short(x) - short(y))[0] // the variant closest to craftable
-  if (!r) return 'there is no crafting recipe for it'
-  const need = r.delta.filter(d => d.count < 0).map(d => {
-    const nm = b.registry.items[d.id]?.name, have = b.inventory.items().filter(i => i.type === d.id).reduce((n, i) => n + i.count, 0)
-    return have < -d.count ? `${-d.count} ${nm} (have ${have})` : null
-  }).filter(Boolean)
-  return need.length ? 'missing ' + need.join(', ') : (r.requiresTable && !table ? 'needs a crafting table within 24 m' : 'unknown reason')
+// ---------- conversation history ----------
+function trim(st) {
+  if (st.aiMsgs.length <= MAX_MSGS) return null
+  const old = st.aiMsgs.splice(0, st.aiMsgs.length - MAX_MSGS / 2)
+  // the new first message must be a plain user message: turn orphaned tool results into text
+  if (st.aiMsgs[0]?.role === 'assistant') old.push(st.aiMsgs.shift())
+  const m = st.aiMsgs[0]
+  if (m && Array.isArray(m.content)) m.content = m.content.map(x => x.type === 'tool_result' ? { type: 'text', text: '(result of an earlier command) ' + (typeof x.content === 'string' ? x.content : '') } : x)
+  return old
+}
+function flat(msgs) {
+  return msgs.map(m => (m.role === 'user' ? 'IN: ' : 'YOU: ') + (typeof m.content === 'string' ? m.content : m.content.map(x => x.text || (x.type === 'tool_use' ? `!${x.name}(${JSON.stringify(x.input)})` : x.type === 'tool_result' ? '-> ' + x.content : '')).join(' '))).join('\n').slice(-6000)
+}
+// Mindcraft's memory summary: keep facts and lessons from the dropped turns, max 500 characters
+async function summarize(cfg, old) {
+  try {
+    const res = await aiCall({ max_tokens: 400, messages: [{ role: 'user', content:
+`You are a minecraft bot that has been playing by using commands. Update your memory by summarizing the following conversation and your old memory. Prioritize important facts, things you've learned, useful tips, and long term reminders. Do not record stats, inventory or docs. Max 500 characters, be extremely brief.
+Old memory: '${cfg.aiMemory || ''}'
+Recent conversation:
+${flat(old)}
+Respond only with the new memory text.` }] })
+    const t = res.content.filter(x => x.type === 'text').map(x => x.text).join(' ').trim()
+    if (t) { cfg.aiMemory = t.slice(0, 600); save() }
+  } catch {}
 }
 
-const ACTIONS = {
-  async gather(b, st, { block, count: n = 8 }) {
-    const key = name(block), test = CATS[key] || (x => x === key || x === 'deepslate_' + key)
-    if (!CATS[key] && !b.registry.blocksByName[key]) throw new Error(`unknown block "${block}" (use logs, stone, or an exact block id like coal_ore)`)
-    const before = b.inventory.items().reduce((s, i) => s + i.count, 0)
-    for (let i = 0; i < n && !st.abort; i++) {
-      if (!b.findBlock({ matching: x => test(x.name), maxDistance: 40 })) { if (i === 0) throw new Error(`no ${key} within 40 m, explore first`); break }
-      await gather(b, st, test, key)
+// ---------- the loop ----------
+export function stopAI(st) {
+  if (!st.ai) return
+  st.ai.loop = false
+  st.ai.agent?.stop()
+  st.ai = null
+}
+
+// called by brain.js on every think while the bot is in "AI plays" mode
+export function ensureAI(b, st, cfg, c, home) {
+  if (st.ai?.loop && st.ai.bot === b) { st.ai.ctx.c = c; st.ai.ctx.home = home; return }
+  stopAI(st)
+  const agent = new McAgent(b, {
+    narrate: msg => st.log?.push({ t: Date.now(), type: 'event', text: msg }),
+    onInterrupted: (action, mode, logs) => inbox(st, `(AUTO MESSAGE) Your previous action '${action}' was interrupted by ${mode}. Behaviour log: ${logs.trim() || '-'}. Continue your plan.`),
+  })
+  st.ai = { loop: true, bot: b, agent, ctx: { st, cfg, c, home } }
+  st.aiMsgs ||= []
+  b.once('end', () => stopAI(st))
+  b.on('death', () => inbox(st, `You died${cfg.lastDeath ? ` at ${cfg.lastDeath.x} ${cfg.lastDeath.y} ${cfg.lastDeath.z}` : ''}. Previous actions were stopped and you have respawned. Your items may still be at the death spot for 5 minutes.`))
+  run(b, st, cfg).catch(e => st.log?.push({ t: Date.now(), type: 'event', text: 'AI loop stopped: ' + String(e.message || e).slice(0, 120) }))
+}
+
+// messages from players / modes reach the AI on its next turn
+export function inbox(st, text) { (st.aiInbox ||= []).push(text); if (st.aiInbox.length > 10) st.aiInbox.shift() }
+
+async function run(b, st, cfg) {
+  const me = st.ai
+  let pendingTool = null // result of the last command, sent with the next message
+  // a command from before a restart / mode change never got its result: answer it so the history stays valid
+  const last = st.aiMsgs.at(-1)
+  if (last?.role === 'user') st.aiMsgs.pop()
+  const dangling = st.aiMsgs.at(-1)?.role === 'assistant' && st.aiMsgs.at(-1).content.find?.(x => x.type === 'tool_use')
+  if (dangling) pendingTool = { id: dangling.id, output: '(the bot reconnected or its mode changed; continue from here)' }
+  while (st.ai === me && me.loop && cfg.mode === 'ai') {
+    if (!b.entity) { await wait(1000); continue }
+    const c = me.ctx.c, now = Date.now()
+    st.aiThinks = (st.aiThinks || []).filter(t => now - t < 3600e3)
+    if (st.aiThinks.length >= c.aiThinkMax || now < (st.aiBackoff || 0)) {
+      // AI limit reached or AI down: keep playing with the built-in routine
+      st.aiPaused = st.aiThinks.length >= c.aiThinkMax ? 'hourly AI limit reached' : 'AI unavailable'
+      if (me.agent.isIdle()) await me.agent.actions.runAction('routine', async () => { await survive(b, st, cfg, c, me.ctx.home) }, { timeout: 2 })
+      await wait(2000); continue
     }
-    return `picked up ${b.inventory.items().reduce((s, i) => s + i.count, 0) - before} items`
-  },
-  async craft(b, st, { item, count: n = 1 }) {
-    const it = itemName(b, item, false), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
-    if (/_planks$/.test(it)) { await planks(b, count(b, /_planks$/) + n); return `now have ${count(b, it)} ${it}` }
-    await wait(300) // let the inventory catch up after the last action
-    const tryCraft = async () => {
-      const before = count(b, it)
-      for (let k = 0; k < 16 && count(b, it) < before + n; k++) {
-        let ok = false
-        try { ok = await craft(b, st, it, 1) } catch { await wait(400); ok = await craft(b, st, it, 1).catch(() => false) }
-        if (!ok) break
-      }
-      return count(b, it) - before
-    }
-    let made = await tryCraft()
-    if (!made) { await planks(b, 8); made = await tryCraft() } // maybe it just needed planks or sticks
-    if (!made && b.registry.itemsByName.stick && it !== 'stick') { await craft(b, st, 'stick', 1).catch(() => {}); made = await tryCraft() }
-    if (!made) throw new Error(`can't craft ${it}: ${missingFor(b, info.id, b.findBlock({ matching: b.registry.blocksByName.crafting_table.id, maxDistance: 24 }))}`)
-    return `crafted ${made} ${it}`
-  },
-  async smelt(b, st, { item, count: n = 1 }) {
-    const it = itemName(b, item), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
-    n = Math.min(n, count(b, it)); if (!n) throw new Error(`you have no ${it}`)
-    let fb = b.findBlock({ matching: b.registry.blocksByName.furnace.id, maxDistance: 24 })
-    if (!fb) {
-      if (!has(b, 'furnace')) throw new Error('no furnace nearby or in inventory (craft one from 8 cobblestone)')
-      await placeNear(b, 'furnace'); fb = b.findBlock({ matching: b.registry.blocksByName.furnace.id, maxDistance: 6 })
-    }
-    await goto(b, new goals.GoalNear(fb.position.x, fb.position.y, fb.position.z, 2))
-    const f = await b.openFurnace(fb)
+    st.aiPaused = ''
+    if (!me.agent.isIdle()) { await wait(500); continue } // a mode is doing something
+    // next user message: last command's result + news + fresh status
+    const parts = []
+    if (pendingTool) parts.push({ type: 'tool_result', tool_use_id: pendingTool.id, content: pendingTool.output || '(no output)' })
+    const news = (st.aiInbox || []).splice(0)
+    parts.push({ type: 'text', text: (news.length ? news.join('\n') + '\n\n' : '') + status(b, me.agent, st, cfg) + (pendingTool ? '' : '\nWhat do you do next?') })
+    st.aiMsgs.push({ role: 'user', content: parts })
+    const sentTool = pendingTool
+    pendingTool = null
+    const old = trim(st); if (old) summarize(cfg, old)
+    st.task = 'AI: thinking…'
+    let res
     try {
-      if (!f.fuelItem()) {
-        const fuel = b.inventory.items().find(i => FUEL.includes(i.name)) || b.inventory.items().find(i => /_planks$|_log$/.test(i.name))
-        if (!fuel) throw new Error('no fuel (coal, charcoal, planks or logs)')
-        await f.putFuel(fuel.type, null, Math.min(fuel.count, FUEL.includes(fuel.name) ? Math.ceil(n / 8) : Math.ceil(n / 1.5)))
-      }
-      await f.putInput(info.id, null, n)
-      for (let t = 0; t < 70 && !st.abort; t++) { await wait(1000); if ((f.outputItem()?.count || 0) >= n || (!f.inputItem() && f.outputItem())) break }
-      const out = f.outputItem()
-      if (out) await f.takeOutput()
-      return out ? `got ${out.count} ${out.name}` : 'nothing came out yet (needs more time or fuel)'
-    } finally { f.close() }
-  },
-  async work_on_base(b, st, _, ctx) {
-    for (let i = 0; i < 3 && !st.abort; i++) { const r = await survive(b, st, ctx.cfg, ctx.c, ctx.home); if (r === 'idle') return 'the base is finished' }
-    return st.task.replace(/^survival: /, 'base routine: ')
-  },
-  async go_to(b, st, { target }, ctx) {
-    const t = String(target || '').trim()
-    let pos
-    if (/^base$/i.test(t)) { if (!ctx.home) throw new Error('no base set'); pos = ctx.home }
-    else if (/^-?\d+\s+-?\d+\s+-?\d+$/.test(t)) { const [x, y, z] = t.split(/\s+/).map(Number); pos = { x, y, z } }
+      st.aiThinks.push(now)
+      res = await aiCall({ max_tokens: 800, system: system(b, cfg, st), tools: TOOLS, tool_choice: { type: 'auto', disable_parallel_tool_use: true }, messages: st.aiMsgs })
+    } catch (e) {
+      st.aiMsgs.pop() // drop the unanswered message, keep the command result for the retry
+      pendingTool = sentTool
+      if (news.length) st.aiInbox = [...news, ...(st.aiInbox || [])]
+      st.aiBackoff = Date.now() + 60e3
+      st.log?.push({ t: Date.now(), type: 'event', text: 'AI error: ' + (e.status ? e.status + ' ' : '') + String(e.message || e).slice(0, 140) })
+      continue
+    }
+    st.count('aiThinks')
+    st.aiMsgs.push({ role: 'assistant', content: res.content })
+    const text = res.content.filter(x => x.type === 'text').map(x => x.text).join(' ').trim()
+    const call = res.content.find(x => x.type === 'tool_use')
+    if (text) st.aiNotes = text.slice(0, 200)
+    if (!call) { await wait(3000); continue }
+    const cmd = BY_NAME[call.name], input = call.input || {}
+    const label = call.name + (Object.keys(input).length ? ' ' + JSON.stringify(input) : '')
+    st.task = 'AI: ' + label.slice(0, 80)
+    let output
+    if (!cmd) output = `Unknown command ${call.name}.`
+    else if (cmd.run) { try { output = await cmd.run(b, me.agent, input, me.ctx) } catch (e) { output = 'Error: ' + e.message } }
     else {
-      const pl = S.places.find(p => p.name.toLowerCase() === t.toLowerCase() && p.server === serverKey(ctx.cfg.host, ctx.cfg.port))
-      const player = b.players[t]?.entity
-      pos = pl || player?.position
-      if (!pos) throw new Error(`don't know "${t}" (not a saved place or a player I can see)`)
+      const r = await me.agent.actions.runAction('action:' + call.name, () => cmd.act(b, input, me.ctx), { timeout: cmd.timeout || 3 })
+      output = (r.message || (r.success ? 'Done.' : 'Failed.')) + (r.timedout ? '\nThe command timed out.' : r.interrupted ? '\nThe command was interrupted.' : '')
     }
-    await goto(b, new goals.GoalNear(pos.x, pos.y, pos.z, 2), ACTION_MS)
-    return `arrived (${near(b, new Vec3(pos.x, pos.y, pos.z))} m from target)`
-  },
-  async explore(b, st, { direction = 'any', distance = 40 }) {
-    // "any" while in water heads for the nearest land; otherwise keep the last direction so it doesn't zig-zag
-    let a = { east: 0, south: Math.PI / 2, west: Math.PI, north: -Math.PI / 2 }[direction]
-    if (a === undefined) a = st.land && (b.entity.isInWater || st.land.dist > 8) ? st.land.angle : st.exploreAngle ?? Math.random() * Math.PI * 2
-    st.exploreAngle = a
-    const p = b.entity.position, from = p.clone()
-    await goto(b, new goals.GoalNearXZ(p.x + Math.cos(a) * distance, p.z + Math.sin(a) * distance, 4), ACTION_MS).catch(() => {})
-    const moved = Math.round(b.entity.position.distanceTo(from))
-    if (moved > distance * 3) return `you were teleported or respawned, now at ${b.entity.position.floored()}`
-    return `walked ${moved} m ${direction === 'any' ? compass(Math.cos(a), Math.sin(a)) : direction}`
-  },
-  async hunt(b, st, { animal = 'any' }) {
-    const a = name(animal)
-    const prey = b.nearestEntity(x => (a === 'any' ? FOOD_MOBS.test(x.name) : x.name === a) && x.position.distanceTo(b.entity.position) < 40)
-    if (!prey) throw new Error(`no ${a === 'any' ? 'food animals' : a} within 40 m${st.land === null || b.entity.isInWater ? ' (you are probably in water/ocean: go to land)' : ''}`)
-    await hunt(b, st, prey)
-    return `killed a ${prey.name}`
-  },
-  async fight(b, st, { mob = 'any' }) {
-    const m = name(mob)
-    const foe = b.nearestEntity(x => x.type === 'hostile' && x.name !== 'creeper' && (m === 'any' || x.name === m) && x.position.distanceTo(b.entity.position) < 24)
-    if (!foe) throw new Error('no such mob nearby')
-    const weapon = b.inventory.items().find(i => /_sword$|_axe$/.test(i.name)); if (weapon) await b.equip(weapon, 'hand')
-    for (let i = 0; i < 30 && foe.isValid && !st.abort && b.health > 6; i++) {
-      if (foe.position.distanceTo(b.entity.position) > 3) await goto(b, new goals.GoalFollow(foe, 2), 5000).catch(() => {})
-      await b.lookAt(foe.position.offset(0, foe.height * 0.8, 0), true); b.attack(foe); await wait(650)
-    }
-    if (!foe.isValid) st.count('kills')
-    return foe.isValid ? 'stopped fighting (low health or it got away)' : `killed the ${foe.name}`
-  },
-  async eat(b) {
-    const foods = b.inventory.items().filter(i => b.registry.foodsByName[i.name] && !/rotten_flesh|spider_eye|poisonous/.test(i.name))
-    const food = foods.sort((x, y) => (b.registry.foodsByName[y.name].saturation || 0) - (b.registry.foodsByName[x.name].saturation || 0))[0]
-    if (!food) throw new Error('no food in inventory')
-    if (b.food >= 20) throw new Error('not hungry')
-    await b.equip(food, 'hand'); await b.consume()
-    return `ate ${food.name}, food now ${b.food}`
-  },
-  async sleep(b) {
-    if (b.time.isDay) throw new Error('you can only sleep at night')
-    const bed = b.findBlock({ matching: bl => b.isABed(bl), maxDistance: 24 })
-    if (!bed) throw new Error('no bed within 24 m')
-    await goto(b, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2))
-    await b.sleep(bed)
-    return 'sleeping'
-  },
-  async equip(b, st, { item }) {
-    const it = itemName(b, item), i = b.inventory.items().find(x => x.name === it)
-    if (!i) throw new Error(`no ${it} in inventory`)
-    const dest = ARMOR_DEST.find(([re]) => re.test(it))?.[1] || 'hand'
-    await b.equip(i, dest)
-    return `equipped ${it} (${dest})`
-  },
-  async store_items(b, st, { keep = [] }) {
-    const chest = b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })
-    if (!chest) throw new Error('no chest within 24 m')
-    await goto(b, new goals.GoalNear(chest.position.x, chest.position.y, chest.position.z, 2))
-    const box = await b.openContainer(chest)
-    let n = 0
-    try {
-      const keepSet = new Set(keep.map(name))
-      for (const i of b.inventory.items()) {
-        if (keepSet.has(i.name) || /_(pickaxe|axe|sword|shovel|hoe|helmet|chestplate|leggings|boots)$|^torch$|^shield$/.test(i.name) || b.registry.foodsByName[i.name]) continue
-        await box.deposit(i.type, null, i.count).then(() => n += i.count, () => {})
-      }
-      rememberChest(st, chest, box.containerItems())
-    } finally { box.close() }
-    st.count('stored'); return `stored ${n} items`
-  },
-  async look_in_chest(b, st) {
-    const chest = b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })
-    if (!chest) throw new Error('no chest within 24 m')
-    await goto(b, new goals.GoalNear(chest.position.x, chest.position.y, chest.position.z, 2))
-    const box = await b.openContainer(chest)
-    try { rememberChest(st, chest, box.containerItems()) } finally { box.close() }
-    return 'the chest has: ' + chestText(st.chestSeen.items)
-  },
-  async take_items(b, st, { item, count: n = 64 }) {
-    const it = itemName(b, item, false), info = b.registry.itemsByName[it]
-    if (!info) throw new Error(`unknown item "${item}".${suggest(b, it)}`)
-    const chest = b.findBlock({ matching: b.registry.blocksByName.chest.id, maxDistance: 24 })
-    if (!chest) throw new Error('no chest within 24 m')
-    await goto(b, new goals.GoalNear(chest.position.x, chest.position.y, chest.position.z, 2))
-    const box = await b.openContainer(chest)
-    try {
-      rememberChest(st, chest, box.containerItems())
-      const inBox = box.containerItems().filter(i => i.type === info.id).reduce((s, i) => s + i.count, 0)
-      if (!inBox) throw new Error(`no ${it} in the chest. It has: ${chestText(st.chestSeen.items)}`)
-      await box.withdraw(info.id, null, Math.min(n, inBox))
-      return `took ${Math.min(n, inBox)} ${it}`
-    } finally { box.close() }
-  },
-  async place_block(b, st, { item }) {
-    const it = itemName(b, item)
-    if (!has(b, it)) throw new Error(`no ${it} in inventory`)
-    const pos = await placeNear(b, it); st.count('placed')
-    return `placed ${it} at ${pos.x} ${pos.y} ${pos.z}`
-  },
-  async set_base(b, st, _, ctx) {
-    const p = b.entity.position.floored()
-    ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; delete ctx.cfg.at; save()
-    return `base set at ${p.x} ${p.y} ${p.z}`
-  },
-  async follow_player(b, st, { player, seconds = 30 }) {
-    const t = b.players[player]?.entity
-    if (!t) throw new Error(`can't see ${player}`)
-    b.pathfinder.setGoal(new goals.GoalFollow(t, 2), true)
-    for (let i = 0; i < seconds && !st.abort; i++) await wait(1000)
-    b.pathfinder.stop(); return `followed ${player}`
-  },
-  async chat(b, st, { message }) {
-    if (Object.keys(b.players).length < 2) throw new Error('nobody else is online')
-    say(b, st, String(message).slice(0, 200)); return 'said it'
-  },
-  async wait(b, st, { seconds = 10 }) {
-    for (let i = 0; i < seconds && !st.abort; i++) await wait(1000)
-    return 'waited'
-  },
+    output = String(output ?? '').slice(0, 1500)
+    pendingTool = { id: call.id, output }
+    remember(st, label, output)
+    await wait(800)
+  }
 }
 
 function remember(st, action, result) {
+  const short = String(result).replace(/\s+/g, ' ').trim().slice(0, 160)
   st.aiHistory ||= []
-  st.aiHistory.push({ action, result: String(result).slice(0, 160) })
+  st.aiHistory.push({ action, result: short })
   if (st.aiHistory.length > 12) st.aiHistory.shift()
-  st.log?.push({ t: Date.now(), type: 'event', text: `AI: ${action} -> ${String(result).slice(0, 120)}` })
-}
-
-// One AI step. Returns false when the AI can't be used right now (caller falls back to the routine).
-export async function aiPlayStep(b, st, cfg, c, home) {
-  const now = Date.now()
-  st.aiThinks = (st.aiThinks || []).filter(t => now - t < 3600e3)
-  if (st.aiThinks.length >= c.aiThinkMax) { st.aiPaused = 'hourly AI limit reached'; return false }
-  if (now < (st.aiBackoff || 0)) return false
-  st.aiPaused = ''
-  st.task = 'AI: thinking…'
-  let res
-  try {
-    st.aiThinks.push(now)
-    res = await aiCall({ max_tokens: 600, system: SYSTEM, tools: TOOLS, tool_choice: { type: 'auto', disable_parallel_tool_use: true }, messages: [{ role: 'user', content: observe(b, st, cfg, home) }] })
-  } catch (e) {
-    st.aiBackoff = now + 60e3 // AI down or misconfigured: use the routine for a minute
-    st.log?.push({ t: now, type: 'event', text: 'AI error: ' + (e.status ? e.status + ' ' : '') + String(e.message || e).slice(0, 140) })
-    return false
-  }
-  st.count('aiThinks')
-  const call = res.content.find(x => x.type === 'tool_use')
-  if (!call || !ACTIONS[call.name]) { remember(st, 'no action', 'the AI did not pick a tool'); await wait(3000); return true }
-  const input = call.input || {}
-  if (input.plan) st.aiNotes = String(input.plan).slice(0, 200)
-  const label = call.name + (Object.keys(input).filter(k => k !== 'plan').length ? ' ' + JSON.stringify(Object.fromEntries(Object.entries(input).filter(([k]) => k !== 'plan'))) : '')
-  st.task = 'AI: ' + label.slice(0, 80)
-  // the same action failed twice recently: don't run it again, tell the AI to change course
-  const key = label.replace(/^(\w+) /, '$1 ')
-  st.aiFails ||= {}
-  const fail = st.aiFails[key]
-  if (fail && fail.n >= 2 && Date.now() - fail.t < 10 * 60e3) {
-    remember(st, label, `blocked: already failed ${fail.n} times (${fail.reason}). Do something different.`)
-    return true
-  }
-  if (!st.survMoves) { b.pathfinder.setMovements(survivalMoves(b, home)); st.survMoves = true } // may dig and pillar
-  st.abort = false; st.aiRunning = true
-  let timer
-  try {
-    const result = await Promise.race([
-      ACTIONS[call.name](b, st, input, { cfg, c, home }),
-      new Promise((_, no) => { timer = setTimeout(() => { st.abort = true; b.pathfinder.stop(); no(new Error('took too long, stopped')) }, ACTION_MS) }),
-    ])
-    remember(st, label, 'ok: ' + result)
-    delete st.aiFails[key]
-  } catch (e) {
-    const why = st.abort && !/too long/.test(e.message) ? 'interrupted (danger nearby)' : String(e.message || e)
-    remember(st, label, 'failed: ' + why)
-    if (!/interrupted/.test(why)) { const f = st.aiFails[key] || { n: 0 }; st.aiFails[key] = { n: f.n + 1, t: Date.now(), reason: why.slice(0, 80) } }
-  } finally { clearTimeout(timer); st.aiRunning = false; st.abort = false }
-  return true
+  st.log?.push({ t: Date.now(), type: 'event', text: `AI: ${action} -> ${short.slice(0, 120)}` })
 }
