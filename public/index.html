@@ -1,17 +1,26 @@
 <!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Wanderbots</title>
 <style>
-:root{--bg:#111;--card:#1b1b1b;--line:#2a2a2a;--fg:#e8e8e8;--dim:#888;--ok:#5fd068;--warn:#e8b339;--bad:#e5534b}
+:root{--bg:#111;--card:#1b1b1b;--line:#2a2a2a;--fg:#e8e8e8;--dim:#888;--ok:#5fd068;--warn:#e8b339;--bad:#e5534b;--acc:#7aa2f7}
 *{box-sizing:border-box}body{margin:0;font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--fg)}
-main{max-width:1000px;margin:auto;padding:20px}h1{font-size:18px;margin:0}h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}
+main{max-width:1060px;margin:auto;padding:20px}h1{font-size:18px;margin:0}h2{font-size:13px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:24px 0 8px}
+h3{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;margin:0 0 6px;font-weight:normal}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.dim{color:var(--dim)}.sp{flex:1}.sm{font-size:12px}
 input,select,button{font:inherit;background:#0c0c0c;color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:6px 8px}
-input{width:130px}.w-host{width:300px}.w-port{width:80px}.w-xyz{width:70px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
+input{width:130px}.w-host{width:300px}.w-xyz{width:70px}.w-chat{flex:1;min-width:180px}button{cursor:pointer}button:hover{border-color:#555}button.p{background:var(--fg);color:#000}
+button.g{background:none;border-color:transparent;color:var(--dim)}button.g:hover{color:var(--fg);border-color:var(--line)}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px 16px;margin:10px 0 4px}.grid b{display:block;font-weight:normal;color:var(--dim);font-size:11px}
-.set{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px 20px}.set label{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.set input[type=number]{width:70px}.set input[type=checkbox]{width:auto}
-.edit{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+.tag{font-size:11px;padding:1px 7px;border-radius:99px;border:1px solid var(--line);color:var(--acc)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:6px 16px;margin:10px 0}.grid b{display:block;font-weight:normal;color:var(--dim);font-size:11px}
+.ctl{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:10px;border-top:1px solid var(--line)}
+.set{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px 20px}.set label{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.set input[type=number]{width:70px}.set input[type=checkbox]{width:auto}.set .wide{grid-column:1/-1}.set .wide input{flex:1;width:auto}
+.det{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+@media(max-width:700px){.det{grid-template-columns:1fr}}
+.chips{display:flex;flex-wrap:wrap;gap:4px}.chip{font-size:12px;padding:2px 8px;border-radius:6px;background:#0c0c0c;border:1px solid var(--line)}
+.log{grid-column:1/-1;max-height:220px;overflow:auto;background:#0c0c0c;border:1px solid var(--line);border-radius:6px;padding:8px;font-size:12px}
+.log div{white-space:pre-wrap;word-break:break-word}.log .t{color:#555;margin-right:6px}
+.l-me{color:var(--acc)}.l-event{color:var(--warn)}.l-server{color:var(--dim)}
 .err{color:var(--bad);font-size:12px;word-break:break-all;margin-top:4px}
 #login{max-width:320px;margin:18vh auto;padding:20px}#login input{width:100%;margin:10px 0}#login button{width:100%}
 [hidden]{display:none!important}
@@ -28,7 +37,13 @@ input{width:130px}.w-host{width:300px}.w-port{width:80px}.w-xyz{width:70px}butto
 <input id="nb" placeholder="username"><input id="nh" class="w-host" placeholder="server e.g. play.example.net:25565">
 <select id="nv"></select><button class="p" onclick="addBot()">+ Add bot</button></div>
 
-<h2>Bots</h2><div id="bots"></div>
+<h2>Bots</h2>
+<div class="card row" id="bulk"><span class="dim sm">All bots:</span>
+<button onclick="all('roam')">Roam</button><button onclick="all('idle')">Idle</button><button onclick="all('rejoin')">Rejoin</button>
+<button onclick="all('pause')">Pause</button><button onclick="all('resume')">Resume</button>
+<select id="bp"></select><button onclick="allSend()">Send</button>
+<input id="bc" class="w-chat" placeholder="say something as every bot…" onkeydown="event.key=='Enter'&&allChat()"><button onclick="allChat()">Say</button></div>
+<div id="bots"></div>
 
 <h2>Places</h2><div class="card row">
 <input id="pn" placeholder="name e.g. farm"><select id="ps"></select>
@@ -37,12 +52,17 @@ input{width:130px}.w-host{width:300px}.w-port{width:80px}.w-xyz{width:70px}butto
 <div id="places"></div>
 
 <h2>Behaviour (all bots)</h2><div class="card"><div class="set" id="set"></div>
-<div class="row" style="margin-top:12px"><span class="sp"></span><button class="p" onclick="saveSet()">Save</button></div></div>
+<div class="row" style="margin-top:12px"><span class="dim sm">Owners can type in game chat: !come !follow !stay !guard !roam !idle !goto &lt;place&gt; !here &lt;name&gt; !status !help</span><span class="sp"></span><button class="p" onclick="saveSet()">Save</button></div></div>
 </main><script>
 const $=id=>document.getElementById(id),v=id=>$(id).value.trim(),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')
 let tok=localStorage.t||'',S,setDrawn=0,editing=''
-const F=[['view','View distance','view'],['roam','Roam radius (blocks)','num'],['homeR','Stay radius at a place','num'],['reconnect','Reconnect delay (s)','num'],
- ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['flee','Run from hostile mobs','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk']]
+const draft={},open=new Set(JSON.parse(localStorage.open||'[]')) // per-bot unsent control values; which bots show details
+const MODES={roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',idle:'Idle (AFK)'}
+const F=[['combat','Hostile mobs','sel',{flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
+ ['reconnect','Reconnect delay (s)','num'],['view','View distance','sel',{tiny:'tiny',short:'short',normal:'normal'}],
+ ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['gear','Wear best armor & weapon','chk'],['pickup','Pick up items','chk'],
+ ['sleep','Sleep in beds at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
+ ['greet','Greet players who join','chk'],['owners','Owners (chat commands)','txt']]
 const srvOf=b=>b.host+':'+b.port
 function show(ok){$('login').hidden=ok;$('app').hidden=!ok}
 async function api(p,b,m){const r=await fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:{'x-token':tok,'content-type':'application/json'},body:b&&JSON.stringify(b)})
@@ -52,40 +72,71 @@ async function login(e){e.preventDefault();const r=await fetch('/api/login',{met
  if(j.token){tok=localStorage.t=j.token;$('lk').value='';$('lerr').textContent='';setDrawn=0;load()}else $('lerr').textContent=j.error}
 function logout(){api('logout',{});tok=localStorage.t='';show(false)}
 function chkey(){const k=prompt('New login key (8+ characters)');k&&api('key',{key:k})}
+const opts=(o,sel)=>Object.entries(o).map(([k,l])=>`<option value="${esc(k)}" ${k==sel?'selected':''}>${esc(l)}</option>`).join('')
 const vopts=sel=>S.versions.map(o=>`<option ${o==sel?'selected':''}>${esc(o)}</option>`).join('')
 function addBot(){api('bots',{name:v('nb'),address:v('nh'),version:$('nv').value}).then(j=>{if(j)nb.value=''})}
 function addPlace(){api('places',{name:v('pn'),server:$('ps').value,x:v('px'),y:v('py'),z:v('pz')}).then(j=>{if(j)pn.value=px.value=py.value=pz.value=''})}
-function drawSet(){$('set').innerHTML=F.map(([k,l,t])=>{const x=S.set[k]
+function all(a){if(a=='pause'&&!confirm('Pause every bot?'))return;api('all/'+a,{})}
+function allSend(){const p=$('bp').value;p&&api('all/send',{place:p}).then(j=>j&&!j.n&&alert('No bots on that server'))}
+function allChat(){const t=v('bc');t&&api('all/chat',{text:t}).then(j=>{if(j)bc.value=''})}
+function drawSet(){$('set').innerHTML=F.map(([k,l,t,o])=>{const x=S.set[k]
  const i=t=='chk'?`<input type=checkbox id="c_${k}" ${x?'checked':''}>`:t=='num'?`<input type=number min=0 max=64 id="c_${k}" value="${x}">`
- :`<select id="c_${k}">${['tiny','short','normal'].map(o=>`<option ${o==x?'selected':''}>${o}</option>`).join('')}</select>`
- return `<label>${l}${i}</label>`}).join('');$('nv').innerHTML=vopts('auto');setDrawn=1}
+ :t=='txt'?`<input id="c_${k}" value="${esc(x)}" placeholder="e.g. Steve, Alex">`:`<select id="c_${k}">${opts(o,x)}</select>`
+ return `<label class="${t=='txt'?'wide':''}">${l}${i}</label>`}).join('');$('nv').innerHTML=vopts('auto');setDrawn=1}
 function saveSet(){const o={};F.forEach(([k,,t])=>o[k]=t=='chk'?$('c_'+k).checked:$('c_'+k).value);api('settings',o).then(()=>setDrawn=0)}
 function fmt(s){return s>3600?(s/3600|0)+'h'+((s%3600)/60|0)+'m':s>60?(s/60|0)+'m':s+'s'}
-function card(b){const c=b.up?'var(--ok)':b.task=='offline'?'var(--bad)':'var(--warn)',i=b.id,srv=srvOf(b)
- const places=S.places.filter(p=>p.server==srv).map(p=>`<option value="${p.id}" ${p.id==b.at?'selected':''}>${esc(p.name)}</option>`).join('')
- const place=S.places.find(p=>p.id==b.at)
+const tm=t=>new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+
+// mode controls: draft keeps what the user picked until they press Apply
+function d(i){return draft[i]||={}}
+function setD(i,k,x){d(i)[k]=x;if(k=='mode')render()}
+function ctl(b){const i=b.id,dr=d(b.id),mode=dr.mode??b.mode,srv=srvOf(b)
+ let pick=''
+ if(mode=='stay'||mode=='guard'){const cur=dr.place??(b.at||'');pick=`<select onchange="setD('${i}','place',this.value)"><option value="">${b.pos?'where it stands now':'current spot'}</option>${S.places.filter(p=>p.server==srv).map(p=>`<option value="${p.id}" ${p.id==cur?'selected':''}>${esc(p.name)}</option>`).join('')}</select>`}
+ if(mode=='follow'){const cur=dr.player??(b.follow||''),list=[...new Set([...(cur?[cur]:[]),...b.players])]
+  pick=`<select onchange="setD('${i}','player',this.value)"><option value="">pick a player</option>${list.map(n=>`<option ${n==cur?'selected':''}>${esc(n)}</option>`).join('')}</select>`}
+ return `<div class="ctl"><select onchange="setD('${i}','mode',this.value)">${opts(MODES,mode)}</select>${pick}<button class="p" onclick="applyMode('${i}')">Apply</button>
+  <button onclick="here('${i}')">Save spot as place</button><span class="sp"></span>
+  <input class="w-chat" id="ch_${i}" placeholder="say in chat as ${esc(b.name)}…" value="${esc(dr.chat||'')}" oninput="d('${i}').chat=this.value" onkeydown="event.key=='Enter'&&sendChat('${i}')"><button onclick="sendChat('${i}')">Say</button></div>`}
+function applyMode(i){const b=S.bots.find(x=>x.id==i),dr=d(i),mode=dr.mode??b.mode
+ const body={mode};if(mode=='stay'||mode=='guard'){const p=dr.place??(b.at||'');if(p)body.place=p;else body.here=true}
+ if(mode=='follow')body.player=dr.player??b.follow
+ api(`bots/${i}/mode`,body).then(j=>{if(j){delete dr.mode;delete dr.place;delete dr.player}})}
+function sendChat(i){const t=(d(i).chat||'').trim();t&&api(`bots/${i}/chat`,{text:t}).then(j=>{if(j)d(i).chat=''})}
+function tog(i){open.has(i)?open.delete(i):open.add(i);localStorage.open=JSON.stringify([...open]);render()}
+
+function card(b){const c=b.paused?'#555':b.up?'var(--ok)':b.task=='offline'||b.task=='unsupported'?'var(--bad)':'var(--warn)',i=b.id
  const info=[b.server||'not reached',b.using&&'using '+b.using+(b.version=='auto'?' (auto)':'')+(b.via?' via ViaProxy':''),b.online!=null&&b.online+'/'+b.max+' online',b.motd].filter(Boolean).map(esc).join(' · ')
- return `<div class="card"><div class="row"><span class="dot" style="background:${c}"></span><b>${esc(b.name)}</b><span class="dim">${esc(b.task)}</span><span class="sp"></span>
-  <select id="s_${i}"><option value="">send to…</option>${places}</select><button onclick="send('${i}')">Go</button>
-  <button onclick="api('bots/${i}/roam',{})">Roam</button><button onclick="here('${i}')">Save spot</button>
-  <button onclick="editing='${i}';render()">Edit</button><button onclick="api('bots/${i}/restart',{})">Rejoin</button><button onclick="confirm('Remove ${esc(b.name)}?')&&api('bots/${i}',null,'DELETE')">✕</button></div>
-  <div class="dim sm" style="margin-top:6px">${esc(srv)} — ${info}</div>
-  <div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div>
-  <div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>uptime</b>${b.up?fmt(b.up):'–'}</div><div><b>place</b>${esc(place?.name||'–')}</div></div>
+ const target=b.mode=='follow'?b.follow:(b.mode=='stay'||b.mode=='guard')?b.home:''
+ return `<div class="card"><div class="row"><span class="dot" style="background:${c}"></span><b>${esc(b.name)}</b><span class="tag">${esc(MODES[b.mode].replace('…',''))}${target?' · '+esc(target):''}</span><span class="dim">${esc(b.task)}</span><span class="sp"></span>
+  ${b.paused?`<button onclick="api('bots/${i}/resume',{})">Resume</button>`:`<button onclick="api('bots/${i}/pause',{})">Pause</button>`}
+  <button onclick="api('bots/${i}/restart',{})">Rejoin</button><button onclick="editing='${i}';render()">Edit</button>
+  <button onclick="confirm('Remove ${esc(b.name)}?')&&api('bots/${i}',null,'DELETE')">✕</button><button class="g" onclick="tog('${i}')">${open.has(i)?'▲ less':'▼ more'}</button></div>
+  <div class="dim sm" style="margin-top:6px">${esc(srvOf(b))} — ${info}</div>
+  <div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>level</b>${b.xp??'–'}</div>
+  <div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div><div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>time</b>${b.day||'–'}</div>
+  <div><b>holding</b>${esc(b.hand||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>uptime</b>${b.up?fmt(b.up):'–'}</div></div>
   ${b.err?`<div class="err">${esc(b.err)}</div>`:''}
-  ${editing==i?`<div class="edit row"><input id="e_n" value="${esc(b.name)}" placeholder="username"><input id="e_h" class="w-host" value="${esc(srv)}" placeholder="server e.g. play.example.net:25565"><select id="e_v">${vopts(b.version)}</select>
+  ${b.paused?'':ctl(b)}
+  ${open.has(i)?`<div class="det">
+   <div><h3>Players online (${b.players.length})</h3><div class="chips">${b.players.map(n=>`<span class="chip">${esc(n)}${b.nearby.includes(n)?' · near':''}</span>`).join('')||'<span class="dim sm">none</span>'}</div></div>
+   <div><h3>Inventory</h3><div class="chips">${b.inv.map(x=>`<span class="chip">${esc(x.n)}${x.c>1?' ×'+x.c:''}</span>`).join('')||'<span class="dim sm">empty</span>'}</div></div>
+   <div class="log" id="log_${i}">${b.log.map(l=>`<div class="l-${l.type}"><span class="t">${tm(l.t)}</span>${l.type=='me'?'&gt; ':''}${esc(l.text)}</div>`).join('')||'<span class="dim">no chat or events yet</span>'}</div></div>`:''}
+  ${editing==i?`<div class="ctl"><input id="e_n" value="${esc(b.name)}" placeholder="username"><input id="e_h" class="w-host" value="${esc(srvOf(b))}" placeholder="server e.g. play.example.net:25565"><select id="e_v">${vopts(b.version)}</select>
    <button class="p" onclick="saveEdit('${i}')">Save &amp; rejoin</button><button onclick="editing='';render()">Cancel</button></div>`:''}</div>`}
 function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),address:v('e_h'),version:$('e_v').value}).then(j=>{if(j){editing='';render()}})}
 function render(){if(!S)return
- $('mem').textContent=S.mem+' MB RAM · '+S.bots.length+' bots'
+ $('mem').textContent=S.mem+' MB RAM · '+S.bots.length+' bots · '+S.bots.filter(b=>b.up).length+' online'
  if(!setDrawn)drawSet()
+ const scroll={};document.querySelectorAll('.log').forEach(l=>scroll[l.id]=l.scrollHeight-l.scrollTop-l.clientHeight<20)
  $('bots').innerHTML=S.bots.map(card).join('')||'<div class="card dim">No bots yet. Add one above.</div>'
- const servers=[...new Set(S.bots.map(srvOf))],ps=$('ps'),cur=ps.value
+ document.querySelectorAll('.log').forEach(l=>{if(scroll[l.id]!==false)l.scrollTop=l.scrollHeight})
+ const servers=[...new Set(S.bots.map(srvOf))],ps=$('ps'),cur=ps.value,bp=$('bp'),bcur=bp.value
  ps.innerHTML=servers.map(s=>`<option ${s==cur?'selected':''}>${esc(s)}</option>`).join('')||'<option value="">add a bot first</option>'
+ bp.innerHTML='<option value="">send all to…</option>'+S.places.map(p=>`<option value="${p.id}" ${p.id==bcur?'selected':''}>${esc(p.name)} (${esc(p.server)})</option>`).join('')
  $('places').innerHTML=S.places.map(p=>`<div class="card row"><b>${esc(p.name)}</b><span class="dim">${p.x} ${p.y} ${p.z}</span><span class="dim sm">${esc(p.server)}</span><span class="sp"></span>
   <button onclick="api('places/${p.id}',null,'DELETE')">✕</button></div>`).join('')}
 async function load(){const j=await api('state');if(!j||!j.bots)return;S=j;show(true);render()}
-function send(i){const p=$('s_'+i).value;p&&api(`bots/${i}/send`,{place:p})}
 function here(i){const x=prompt('Name this spot (e.g. farm)');x&&api(`bots/${i}/here`,{name:x})}
 tok?load():show(false)
 setInterval(()=>{if(tok&&!$('app').hidden&&!editing&&!document.activeElement.matches('input,select'))load()},2000)

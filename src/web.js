@@ -3,7 +3,8 @@ import http from 'node:http'
 import fs from 'node:fs'
 import { S, DEFAULTS, save, newId, serverKey } from './store.js'
 import * as auth from './auth.js'
-import { start, stop, restart, live, stats, placeOf } from './bots.js'
+import { start, stop, restart, live, stats, placeOf, setMode, chat } from './bots.js'
+import { MODES } from './brain.js'
 import { SUPPORTED } from './version.js'
 
 const page = fs.readFileSync(new URL('../public/index.html', import.meta.url))
@@ -17,7 +18,30 @@ function clean(k, v) {
   if (typeof DEFAULTS[k] === 'boolean') return !!v
   if (typeof DEFAULTS[k] === 'number') return Math.max(0, Math.min(64, +v || 0))
   if (k === 'view') return ['tiny', 'short', 'normal'].includes(v) ? v : 'tiny'
+  if (k === 'combat') return ['flee', 'fight', 'ignore'].includes(v) ? v : 'flee'
+  if (k === 'owners') return String(v || '').split(',').map(s => s.trim()).filter(validName).slice(0, 20).join(', ')
   return DEFAULTS[k]
+}
+
+// turn a mode request from the panel into a bot patch; returns error text or the patch
+function modePatch(cfg, st, { mode, place, player, here }) {
+  if (!MODES.includes(mode)) return 'unknown mode'
+  if (mode === 'follow') {
+    const name = String(player || '').trim()
+    if (!validName(name)) return 'pick a player to follow'
+    return { mode, follow: name }
+  }
+  if (mode === 'stay' || mode === 'guard') {
+    if (place) {
+      const p = placeOf(place); if (!p) return 'no place'
+      if (p.server !== serverKey(cfg.host, cfg.port)) return 'that place is on another server'
+      return { mode, at: p.id }
+    }
+    const pos = st?.bot?.entity?.position
+    if (here || !cfg.at) { if (!pos) return 'bot is not in the world'; return { mode, spot: { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) } } }
+    return { mode }
+  }
+  return { mode }
 }
 
 // "play.x.net:25566", "play.x.net", "https://play.x.net:25566/" -> { host, port }
@@ -81,6 +105,24 @@ async function handle(q, body, send) {
     save(); return send(200, {})
   }
 
+  if (what === 'all') { // bulk actions: roam | idle | rejoin | pause | resume | send {place} | chat {text}
+    const p = id === 'send' && placeOf(body.place)
+    if (id === 'send' && !p) return send(400, { error: 'pick a place' })
+    let n = 0
+    for (const cfg of S.bots) {
+      const st = live.get(cfg.id)
+      if (id === 'roam' || id === 'idle') setMode(cfg.id, { mode: id })
+      else if (id === 'rejoin') { delete cfg.paused; restart(cfg.id) }
+      else if (id === 'pause') { cfg.paused = true; stop(cfg.id) }
+      else if (id === 'resume') { delete cfg.paused; start(cfg.id) }
+      else if (id === 'send') { if (p.server !== serverKey(cfg.host, cfg.port)) continue; setMode(cfg.id, { mode: 'stay', at: p.id }) }
+      else if (id === 'chat') { if (!chat(cfg.id, String(body.text || '').slice(0, 250))) continue }
+      else return send(404, { error: 'unknown action' })
+      n++
+    }
+    save(); return send(200, { n })
+  }
+
   if (what === 'bots') {
     if (q.method === 'POST' && !id) {
       const f = botFields(body); if (typeof f === 'string') return send(400, { error: f })
@@ -91,16 +133,23 @@ async function handle(q, body, send) {
     if (q.method === 'DELETE') { stop(id); S.bots = S.bots.filter(b => b !== cfg); save(); return send(200, {}) }
     if (act === 'edit') { // username / server / port / version -> rejoin
       const f = botFields(body, cfg); if (typeof f === 'string') return send(400, { error: f })
-      if (serverKey(f.host, f.port) !== serverKey(cfg.host, cfg.port)) delete cfg.at // places belong to a server
+      if (serverKey(f.host, f.port) !== serverKey(cfg.host, cfg.port)) { delete cfg.at; delete cfg.spot; if (cfg.mode === 'stay' || cfg.mode === 'guard') cfg.mode = 'roam' } // places belong to a server
       Object.assign(cfg, f); save(); restart(id); return send(200, {})
     }
-    if (act === 'send') {
-      const p = placeOf(body.place); if (!p) return send(400, { error: 'no place' })
-      if (p.server !== serverKey(cfg.host, cfg.port)) return send(400, { error: 'that place is on another server' })
-      cfg.at = p.id; save(); st?.goto?.(p); return send(200, {})
+    if (act === 'mode') { // { mode, place?, player?, here? }
+      const r = modePatch(cfg, st, body); if (typeof r === 'string') return send(400, { error: r })
+      setMode(id, r); return send(200, {})
     }
-    if (act === 'roam') { delete cfg.at; save(); st?.roam?.(); return send(200, {}) }
-    if (act === 'restart') { restart(id); return send(200, {}) }
+    if (act === 'send') { const r = modePatch(cfg, st, { mode: 'stay', place: body.place }); if (typeof r === 'string') return send(400, { error: r }); setMode(id, r); return send(200, {}) }
+    if (act === 'roam') { setMode(id, { mode: 'roam' }); return send(200, {}) }
+    if (act === 'chat') {
+      const msg = String(body.text || '').trim().slice(0, 250)
+      if (!msg) return send(400, { error: 'empty message' })
+      return chat(id, msg) ? send(200, {}) : send(400, { error: 'bot is not in the world' })
+    }
+    if (act === 'pause') { cfg.paused = true; save(); stop(id); return send(200, {}) }
+    if (act === 'resume') { delete cfg.paused; save(); start(id); return send(200, {}) }
+    if (act === 'restart') { delete cfg.paused; save(); restart(id); return send(200, {}) }
     if (act === 'here') {
       const pos = st?.bot?.entity?.position, name = short(body.name)
       if (!pos) return send(400, { error: 'bot is not in the world' })

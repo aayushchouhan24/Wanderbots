@@ -7,7 +7,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import net from 'node:net'
 
-const DIR = path.resolve('viaproxy')
+import { fileURLToPath } from 'node:url'
+const DIR = fileURLToPath(new URL('../viaproxy', import.meta.url)) // <project>/viaproxy
 const JAR = path.join(DIR, 'ViaProxy.jar')
 export const VIA = { host: '127.0.0.1', port: 25568 }
 let proc = null, ready = null

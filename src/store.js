@@ -3,11 +3,20 @@
 import fs from 'node:fs'
 import crypto from 'node:crypto'
 
-// default bot behaviour (shared by all bots); editable from the panel
-export const DEFAULTS = { roam: 15, homeR: 6, lookPlayers: true, eat: true, flee: true, fidget: true, sprint: false, reconnect: 10, view: 'tiny' }
+// shared behaviour for all bots; editable from the panel
+export const DEFAULTS = {
+  combat: 'flee',     // hostile mobs: 'flee' | 'fight' | 'ignore'  (guards always fight)
+  guardR: 12,         // how far a guard looks for mobs
+  roam: 15, homeR: 6, // wander radius when roaming / around a place
+  lookPlayers: true, eat: true, gear: true, pickup: true, sleep: true, fidget: true, sprint: false,
+  replies: true,      // answer when someone says the bot's name
+  greet: false,       // say hi when players join
+  owners: '',         // comma-separated player names allowed to use !commands in chat
+  reconnect: 10, view: 'tiny',
+}
 
 export const S = {
-  bots: [],    // [{ id, name, host, port, version, at? }]   at = place id
+  bots: [],    // [{ id, name, host, port, version, mode, at?, spot?, follow?, paused? }]  at = place id
   places: [],  // [{ id, name, server: 'host:port', x, y, z }]
   set: { ...DEFAULTS },
   keyHash: '',
@@ -30,8 +39,10 @@ function apply(d) {
   const bots = (d.bots || []).map(b => ({
     id: b.id || newId(), name: b.name, host: b.host || d.host || 'localhost', port: b.port || d.port || 25565,
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
+    spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
   }))
-  const { version, ...set } = d.set || {}
+  const { version, flee, ...set } = d.set || {}
+  if (flee === false && !set.combat) set.combat = 'ignore'
   Object.assign(S, { bots, places, keyHash: d.keyHash || '', set: { ...DEFAULTS, ...set } })
 }
 

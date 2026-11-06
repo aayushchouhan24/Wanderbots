@@ -8,10 +8,20 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 
 - **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
 - **Any version.** Each bot pings its server and joins with the matching version. Versions 1.8.8 to 26.1 connect directly. Newer servers (26.2, 26.3, …) go through a built-in [ViaProxy](https://github.com/ViaVersion/ViaProxy), started automatically only when needed.
-- **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak, swing, eat and run from hostile mobs. They never break or place blocks.
+- **Modes per bot.** Roam, stay at a place, follow a player, guard a place (fights mobs there), or idle (AFK).
+- **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak and swim up in water. They also:
+  - eat when hungry
+  - fight or run from hostile mobs, depending on the setting
+  - wear their best armor and hold their best weapon
+  - pick up dropped items
+  - sleep in a nearby bed at night
+
+  They never break or place blocks.
+- **Chat.** Bots reply when someone says their name and can greet players who join. Players listed as owners can command them in game chat (see below). Each bot keeps a log of chat and events in the panel.
 - **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
-- **Live stats.** Health, food, position, world, ping, uptime and players online.
-- **Everything editable in the panel.** Per bot: username, server, port and version. For all bots: roam radius, stay radius, view distance, reconnect delay and behaviour toggles.
+- **Buttons for all bots.** Roam, idle, rejoin, pause, resume, send all to a place, or say something as every bot.
+- **Live stats.** Health, food, level, position, world, day or night, held item, ping and uptime. The details view adds online players, inventory and the log.
+- **Everything editable in the panel.** Per bot: username, server, port and version. For all bots: mob handling, guard, roam and stay radius, view distance, reconnect delay, behaviour toggles and the owners list.
 - **Login key.** The key is stored only as a hash. Sessions last 7 days. Too many wrong tries locks login for 15 minutes.
 - **Storage.** MongoDB, or a local `data.json` file if MongoDB isn't set.
 
@@ -63,7 +73,8 @@ src/
   auth.js      login key, sessions, lockout
   version.js   server ping and version detection
   bots.js      bot lifecycle per server: connect, reconnect, places, stats
-  brain.js     "real player" behaviour, runs about once a second
+  brain.js     modes and "real player" behaviour, runs about once a second
+  chat.js      chat log, replies, greetings, owner commands
   fixes.js     protocol fixes (tick_end)
   viaproxy.js  starts ViaProxy for servers newer than 26.1
   web.js       HTTP server and JSON API
@@ -85,12 +96,31 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/bots`                  | `{ name, address, version }` (address like `play.x.net:25565`) |
 | `DELETE` | `/api/bots/:id`              |                         |
 | `POST`   | `/api/bots/:id/edit`         | `{ name, address, version }` (address like `play.x.net:25565`) |
-| `POST`   | `/api/bots/:id/send`       | `{ place }` (place id)  |
-| `POST`   | `/api/bots/:id/roam`       |                         |
+| `POST`   | `/api/bots/:id/mode`         | `{ mode, place?, player?, here? }` |
+| `POST`   | `/api/bots/:id/chat`         | `{ text }`              |
+| `POST`   | `/api/bots/:id/pause`        |                         |
+| `POST`   | `/api/bots/:id/resume`       |                         |
 | `POST`   | `/api/bots/:id/restart`    |                         |
 | `POST`   | `/api/bots/:id/here`       | `{ name }` (save spot)  |
+| `POST`   | `/api/all/:action`           | `roam` `idle` `rejoin` `pause` `resume` `send {place}` `chat {text}` |
 | `POST`   | `/api/places`                | `{ name, server, x, y, z }` |
 | `DELETE` | `/api/places/:id`          |                         |
+
+## Chat commands
+
+Add player names to **Owners** in the panel. Those players can then type these in game chat:
+
+| Command          | What the bot does                                  |
+|------------------|----------------------------------------------------|
+| `!come` / `!follow` | follows you                                    |
+| `!stay`          | stays where you are standing                       |
+| `!guard`         | guards where you are standing and fights mobs      |
+| `!roam`          | wanders freely                                     |
+| `!idle`          | stands still (AFK)                                 |
+| `!goto <place>`  | walks to a saved place and stays there             |
+| `!here <name>`   | saves where you stand as a place                   |
+| `!status`        | replies with health, food, position and activity   |
+| `!help`          | lists the commands                                 |
 
 ## How newer servers work
 
