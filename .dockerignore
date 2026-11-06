@@ -6,6 +6,7 @@ data.json
 *.log
 *.pem
 *.key
+viaproxy/
+schematics/
 .git
 README.md
-viaproxy/

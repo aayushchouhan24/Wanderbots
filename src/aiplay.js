@@ -16,6 +16,7 @@ import * as mc from './mc/mcdata.js'
 import { McAgent } from './mc/agent.js'
 import { BLUEPRINTS, housePlan, buildHouse } from './mc/build.js'
 import { upgradeGear, canUpgrade } from './gear.js'
+import { listSchematics, startBuild, runBuild, placeOnGround } from './schemstore.js'
 
 const wait = ms => new Promise(r => setTimeout(r, ms))
 const MAX_MSGS = 24           // conversation turns kept before older ones are folded into memory
@@ -117,6 +118,19 @@ const COMMANDS = [
   { name: 'workOnBase', description: 'Let the built-in routine do the next steps of setting up your base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot.', timeout: 4,
     act: async (b, x, ctx) => { for (let i = 0; i < 3 && !b.interrupt_code; i++) { if (await survive(b, ctx.st, ctx.cfg, ctx.c, ctx.home) === 'idle') { skills.log(b, 'The base is finished.'); return } } skills.log(b, ctx.st.task.replace(/^survival: /, 'Base routine: ')) } },
   { name: 'setBase', description: 'Make where you stand your base (home for sleeping, storage, building).', run: (b, a, x, ctx) => { const p = b.entity.position.floored(); ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; delete ctx.cfg.at; save(); return `Base set at ${p.x} ${p.y} ${p.z}.` } },
+  { name: 'listSchematics', description: 'List the building schematics (saved designs) you can build, with sizes and materials.', run: () => 'SCHEMATICS: ' + (listSchematics().map(s => `${s.name} (${s.size.x}x${s.size.y}x${s.size.z}, ${s.blocks} blocks; needs ${Object.entries(s.materials).slice(0, 6).map(([k, v]) => v + ' ' + k).join(', ')})`).join('; ') || 'none uploaded yet') },
+  { name: 'buildSchematic', description: 'Start building a saved schematic (design). where: base, here, or "x y z". rot: 0-3 quarter turns. Uses /setblock if you are op, otherwise places blocks from your inventory. Then call continueBuild until finished.', params: [P('name', 'string', 'Schematic name'), P('where', 'string', 'base, here, or x y z'), P('rot', 'int', 'Quarter turns 0-3')], timeout: 6,
+    act: async (b, { name, where = 'base', rot = 0 }, ctx) => {
+      const s = listSchematics().find(x => x.name.toLowerCase() === String(name).toLowerCase()); if (!s) { skills.log(b, `No schematic named "${name}". Use listSchematics.`); return }
+      let origin = where === 'here' ? b.entity.position : where === 'base' ? ctx.home : null
+      if (!origin && /^-?\d+\s+-?\d+\s+-?\d+$/.test(String(where).trim())) { const [x, y, z] = String(where).trim().split(/\s+/).map(Number); origin = { x, y, z } }
+      if (!origin) origin = b.entity.position
+      if (where === 'here' || where === 'base') origin = await placeOnGround(b, s.name, origin)
+      startBuild(ctx.cfg, s.name, origin, { rot })
+      skills.log(b, await runBuild(b, ctx.cfg, { max: 60, shouldStop: () => b.interrupt_code }))
+    } },
+  { name: 'continueBuild', description: 'Keep building the current schematic (places the next blocks; reports missing materials).', timeout: 6,
+    act: async (b, x, ctx) => { if (!ctx.cfg.build || ctx.cfg.build.state === 'done') { skills.log(b, 'No build in progress.'); return } ctx.cfg.build.state = 'running'; skills.log(b, await runBuild(b, ctx.cfg, { max: 60, shouldStop: () => b.interrupt_code })) } },
   { name: 'upgradeGear', description: 'Turn your diamonds / iron (also diamond_block and iron_block, and what is in the nearby chest) into the best tools (sword, pickaxe, axe, shovel) and armor (helmet, chestplate, leggings, boots), and wear them. Use this whenever you get diamonds or iron.', timeout: 5,
     act: async (b, x, ctx) => { ctx.st.gearRunning = true; ctx.st.gearAt = Date.now(); try { await upgradeGear(b) } finally { ctx.st.gearRunning = false } } },
   { name: 'pickupItems', description: 'Walk to dropped items lying nearby and pick them up.', timeout: 2,
@@ -154,6 +168,7 @@ Minecraft knowledge:
 - Recipe counts: craftRecipe crafts a recipe N times; 1 log = 4 planks; 2 planks = 4 sticks.
 - Food: kill cows, pigs, sheep, chickens (beef, porkchop, mutton, chicken) and cook them in a furnace. Eat before hunger gets low.
 - A bed (3 wool of one colour + 3 planks) lets you sleep and sets your respawn point. Sheep give wool.
+- Build on flat, open ground at the surface, never underground or over a cave. Owners can upload schematics (designs). When an owner asks you to build something, use listSchematics and buildSchematic, then continueBuild until done; gather missing materials in between.
 - Build a real house with buildHouse (a wood house needs about 60 planks and 8 logs, a stone house cobblestone and planks). Never build random walls with placeHere.
 - Night is dangerous: be at your base or in a shelter, place torches, sleep if you have a bed.
 - If you are in water or an ocean, go to land first. Use goToSurface if you are underground.
@@ -179,6 +194,8 @@ function status(b, agent, st, cfg) {
   let s = stats(b, agent) + '\n' + inventory(b)
   if (home) s += `\n- Base: ${home.x} ${home.y} ${home.z}`
   if (canUpgrade(b)) s += '\n- You have materials for better tools/armor: use upgradeGear now.'
+  const job = cfg.build
+  if (job && job.state !== 'done') s += `\n- Building schematic ${job.schem} at ${job.origin.x} ${job.origin.y} ${job.origin.z}: ${job.placed || 0} placed${job.remaining != null ? ', ' + job.remaining + ' to go' : ''}${Object.keys(job.missing || {}).length ? '. Missing: ' + Object.entries(job.missing).slice(0, 6).map(([k, v]) => v + ' ' + k).join(', ') + ' (gather or craft them, then continueBuild)' : ' (use continueBuild)'}`
   const items = {}
   for (const e of Object.values(b.entities)) if (e.name === 'item' && e.position.distanceTo(b.entity.position) < 24) { const it = e.getDroppedItem?.(); if (it) { const k = it.name; items[k] ||= { n: 0, d: 99 }; items[k].n += it.count; items[k].d = Math.min(items[k].d, Math.round(e.position.distanceTo(b.entity.position))) } }
   if (Object.keys(items).length) s += '\n- Dropped items nearby: ' + Object.entries(items).map(([k, v]) => `${k} x${v.n} (${v.d} m)`).join(', ')

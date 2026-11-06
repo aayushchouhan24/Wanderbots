@@ -98,5 +98,5 @@ export class McAgent {
 
   clearBotLogs() { this.bot.output = ''; this.bot.interrupt_code = false }
 
-  stop() { this.running = false; return this.actions.stop() }
+  async stop() { this.running = false; await this.actions.stop(); this.clearBotLogs() } // also clears the interrupt flag for the other modes
 }

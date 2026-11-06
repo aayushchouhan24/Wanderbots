@@ -25,7 +25,8 @@ export async function ensure() {
     proc?.kill(); proc = null; ready = null // dead or hung: start a fresh one
   }
   if (!available()) throw new Error('ViaProxy.jar not found in ./viaproxy (see README)')
-  if (!ready && await portOpen()) throw new Error(`port ${VIA.port} is already used by another program (another Wanderbots running?)`)
+  // a ViaProxy left running (e.g. after a crash or restart) still works: reuse it instead of failing
+  if (!ready && await portOpen()) { console.log(`[viaproxy] reusing the one already running on port ${VIA.port}`); ready = Promise.resolve(); proc = proc || { kill() {} }; return }
   if (ready) return ready
   ready = new Promise((resolve, reject) => {
     proc = spawn('java', ['-Xmx256m', '-jar', JAR, 'cli', '--bind-address', `${VIA.host}:${VIA.port}`,

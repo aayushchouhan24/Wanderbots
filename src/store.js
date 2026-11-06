@@ -42,7 +42,8 @@ export const newId = () => crypto.randomBytes(4).toString('hex')
 export const serverKey = (host, port) => `${host}:${port}`
 
 const FILE = './data.json'
-let col
+let col, mdb
+export const getDb = () => mdb // MongoDB database, or undefined when using data.json
 
 function apply(d) {
   if (!d) return
@@ -57,7 +58,7 @@ function apply(d) {
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
     spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
     set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats, lastDeath: b.lastDeath, spawnBed: b.spawnBed,
-    aiMemory: b.aiMemory, aiFacts: b.aiFacts, house: b.house,
+    aiMemory: b.aiMemory, aiFacts: b.aiFacts, house: b.house, build: b.build,
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'
@@ -69,7 +70,7 @@ export async function loadStore() {
     const { MongoClient } = await import('mongodb')
     const cli = new MongoClient(process.env.MONGO_URI, { maxPoolSize: 2 })
     await cli.connect()
-    col = cli.db().collection('state')
+    mdb = cli.db(); col = mdb.collection('state')
     apply(await col.findOne({ _id: 'main' }))
     console.log('[store] mongodb,', S.bots.length, 'bots')
   } else {

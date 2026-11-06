@@ -10,7 +10,10 @@ export const SUPPORTED = [...new Set([...(mineflayer.testedVersions || []), ...m
 export const servers = new Map() // 'host:port' -> last ping result
 
 // chat component (string / JSON / NBT) -> plain text
-export const text = c => plain(c).replace(/§./g, '')
+// newer servers send chat/kick text as NBT ({ type, value } wrappers): unwrap that first
+const unwrap = v => v && typeof v === 'object' && !Array.isArray(v) && 'type' in v && 'value' in v && Object.keys(v).length === 2 ? unwrap(v.value)
+  : Array.isArray(v) ? v.map(unwrap) : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unwrap(x)])) : v
+export const text = c => plain(unwrap(c)).replace(/§./g, '')
 const plain = c => typeof c === 'string' ? c : !c ? '' : Array.isArray(c) ? c.map(plain).join('') :
   (c.text ?? c.translate ?? '') + (c.with ? ' ' + plain(c.with) : '') + plain(c.extra) || (c.value ? plain(c.value) : JSON.stringify(c))
 

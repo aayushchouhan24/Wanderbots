@@ -7,6 +7,7 @@ import { start, stop, restart, live, stats, placeOf, setMode, chat, invAction } 
 import { MODES } from './brain.js'
 import { SUPPORTED } from './version.js'
 import { aiReady, aiConfig } from './ai.js'
+import { listSchematics, addSchematic, addSchematicFromUrl, deleteSchematic, startBuild, placeOnGround } from './schemstore.js'
 
 const page = fs.readFileSync(new URL('../public/index.html', import.meta.url))
 const validName = n => /^[A-Za-z0-9_]{3,16}$/.test(n)
@@ -77,7 +78,8 @@ function botFields(body, cur = {}) {
 
 async function readBody(q) {
   let raw = ''
-  for await (const c of q) { raw += c; if (raw.length > 1e4) throw new Error('too big') }
+  const limit = q.url.startsWith('/api/schematics') ? 22e6 : 1e4 // schematic uploads (base64) can be big
+  for await (const c of q) { raw += c; if (raw.length > limit) throw new Error('too big') }
   try { return JSON.parse(raw || '{}') } catch { return {} }
 }
 
@@ -92,7 +94,13 @@ async function handle(q, body, send) {
   if (what === 'logout') { auth.logout(token); return send(200, {}) }
   if (what === 'key') { const err = auth.changeKey(body.key); return err ? send(400, { error: err }) : send(200, { relogin: true }) }
 
-  if (what === 'state') return send(200, { ...stats(), versions: ['auto', ...SUPPORTED.slice().reverse()], aiKeySet: !!S.aiKey, ai: { ...aiConfig(), ready: aiReady() } })
+  if (what === 'state') return send(200, { ...stats(), versions: ['auto', ...SUPPORTED.slice().reverse()], aiKeySet: !!S.aiKey, ai: { ...aiConfig(), ready: aiReady() }, schematics: listSchematics() })
+  if (what === 'schematics') { // { filename, data: base64 } upload, or { url }
+    if (q.method === 'DELETE') { await deleteSchematic(id); return send(200, {}) }
+    if (body.url) return send(200, await addSchematicFromUrl(String(body.url).trim()))
+    if (!body.data) return send(400, { error: 'choose a file or paste a link' })
+    return send(200, await addSchematic(String(body.filename || 'upload.zip'), Buffer.from(String(body.data), 'base64')))
+  }
   if (what === 'aiconfig') { // { provider, region, model }
     const provider = body.provider === 'anthropic' ? 'anthropic' : 'bedrock'
     const region = String(body.region || '').trim(), model = String(body.model || '').trim()
@@ -194,6 +202,17 @@ async function handle(q, body, send) {
       }
       save(); return send(200, { note: 'applies on next join' })
     }
+    if (act === 'build') { // { schem, where: 'base' | 'here' | 'x y z', rot: 0-3, mode: auto | survival | commands }
+      if (!listSchematics().some(s => s.name === body.schem)) return send(400, { error: 'pick a schematic' })
+      const pos = st?.bot?.entity?.position, home = cfg.spot || S.places.find(p => p.id === cfg.at)
+      let origin = body.where === 'here' ? pos : body.where === 'base' ? home : null
+      if (!origin && /^-?\d+\s+-?\d+\s+-?\d+$/.test(String(body.where || '').trim())) { const [x, y, z] = String(body.where).trim().split(/\s+/).map(Number); origin = { x, y, z } }
+      if (!origin) return send(400, { error: body.where === 'base' ? 'this bot has no base yet' : 'the bot is not in the world' })
+      if ((body.where === 'here' || body.where === 'base') && st?.bot?.entity) origin = await placeOnGround(st.bot, body.schem, origin) // on the surface, not in a cave
+      startBuild(cfg, body.schem, origin, { rot: +body.rot || 0, mode: ['survival', 'commands'].includes(body.mode) ? body.mode : 'auto' })
+      return send(200, {})
+    }
+    if (act === 'buildstop') { if (cfg.build) { cfg.build.state = 'done'; cfg.build.stopped = true; save() } return send(200, {}) }
     if (act === 'inv') { const err = await invAction(id, body.action, body.slot); return err ? send(400, { error: err }) : send(200, {}) }
     if (act === 'pause') { cfg.paused = true; save(); stop(id); return send(200, {}) }
     if (act === 'resume') { delete cfg.paused; save(); start(id); return send(200, {}) }

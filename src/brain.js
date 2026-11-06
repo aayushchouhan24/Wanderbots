@@ -7,6 +7,7 @@ import { survive, goto } from './survival.js'
 import { ensureAI, stopAI } from './aiplay.js'
 import { fightPlayer } from './combat.js'
 import { upgradeGear } from './gear.js'
+import { runBuild } from './schemstore.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -96,6 +97,8 @@ function pickActivity(b, st, c, home) {
   return act
 }
 
+const mobNear = b => !!b.nearestEntity(x => x.type === 'hostile' && x.position.distanceTo(b.entity.position) < 8)
+
 export async function think(b, st, cfg) {
   const e = b.entity, c = eff(cfg)
   // while the AI's action runs, a mob right next to us interrupts it so the reflexes below can react
@@ -104,6 +107,12 @@ export async function think(b, st, cfg) {
     if (danger && !st.abort) { st.abort = true; b.pathfinder.stop(); try { b.stopDigging() } catch {} }
   }
   if (!e || st.busy || b.isSleeping) return
+  if (cfg.build?.state === 'running' && !st.ai && !mobNear(b)) { // building a schematic
+    st.busy = true; st.task = `building ${cfg.build.schem} (${cfg.build.placed || 0} placed)`
+    b.interrupt_code = false // a leftover stop request from AI mode would skip every block
+    try { const r = await runBuild(b, cfg, { max: 30 }); st.log?.push({ t: Date.now(), type: 'event', text: r }); if (cfg.build.state !== 'running') st.task = r } catch (e) { st.log?.push({ t: Date.now(), type: 'event', text: 'build error: ' + e.message }) }
+    st.busy = false; return
+  }
   if (st.gearUpgrade && !st.ai) { // got diamonds/iron: make and wear the best gear
     st.gearUpgrade = false; st.busy = true; st.task = 'upgrading gear'
     try { st.log?.push({ t: Date.now(), type: 'event', text: 'gear: ' + (await upgradeGear(b)).msg }) } catch {}

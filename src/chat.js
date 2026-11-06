@@ -4,6 +4,7 @@ import { rnd } from './brain.js'
 import { aiReply, aiReady, aiCall } from './ai.js'
 import { inbox } from './aiplay.js'
 import { isCalled } from './social.js'
+import { listSchematics, startBuild, addSchematicFromUrl, placeOnGround } from './schemstore.js'
 
 const pick = a => a[Math.floor(Math.random() * a.length)]
 const REPLY = ['hi', 'hey', 'yo', 'sup', 'hello :)', 'hm?', "what's up", 'yeah?', 'hey there']
@@ -84,13 +85,14 @@ const ORDERS = [
   ['goto', 'Go to a saved place and stay there.', { place: { type: 'string', description: 'Saved place name' } }],
   ['status', 'Tell the owner your health, food, position and what you are doing.'],
   ['ai', 'Switch to playing by itself with AI, working towards a goal (use for any task like gathering, building, crafting, mining, fighting).', { goal: { type: 'string', description: 'The task or goal, in the owner\'s words' } }],
+  ['build', 'Build a saved schematic (design), or one from a link the owner pasted.', { schematic: { type: 'string', description: 'Schematic name, or empty if a link was given' }, url: { type: 'string', description: 'Link to a schematic file, if the owner pasted one' }, where: { type: 'string', description: 'here (where the owner stands), base, or x y z' } }],
   ['reply', 'Just answer in chat (questions, small talk).', { message: { type: 'string', description: 'Short reply' } }],
 ]
 async function ownerOrder(b, st, cfg, user, msg, setMode) {
   const places = S.places.filter(p => p.server === `${cfg.host}:${cfg.port}`).map(p => p.name)
   const res = await aiCall({
     max_tokens: 300,
-    system: `You control a Minecraft bot named ${b.username}. Its owner ${user} just wrote in chat. Pick the one command that does what the owner wants. Saved places: ${places.join(', ') || 'none'}. Current mode: ${cfg.mode || 'roam'}.`,
+    system: `You control a Minecraft bot named ${b.username}. Its owner ${user} just wrote in chat. Pick the one command that does what the owner wants. Saved places: ${places.join(', ') || 'none'}. Saved schematics: ${listSchematics().map(s => s.name).join(', ') || 'none'}. Current mode: ${cfg.mode || 'roam'}.`,
     tools: ORDERS.map(([name, description, props = {}]) => ({ name, description, input_schema: { type: 'object', properties: props, required: Object.keys(props) } })),
     tool_choice: { type: 'auto' },
     messages: [{ role: 'user', content: `${user}: ${msg}` }],
@@ -99,6 +101,19 @@ async function ownerOrder(b, st, cfg, user, msg, setMode) {
   if (!call) return
   log(st, 'event', `owner ${user}: "${msg}" -> ${call.name}`)
   if (call.name === 'reply') return later(b, st, String(call.input.message || '').slice(0, 200))
+  if (call.name === 'build') {
+    let name = call.input.schematic, url = call.input.url || (msg.match(/https?:\/\/\S+/) || [])[0]
+    try {
+      if (url) { later(b, st, 'downloading the schematic...'); name = (await addSchematicFromUrl(url)).name }
+      const s = listSchematics().find(x => x.name.toLowerCase() === String(name || '').toLowerCase()) || (listSchematics().length === 1 && !name ? listSchematics()[0] : null)
+      if (!s) return later(b, st, `don't have a schematic called ${name || 'that'}${listSchematics().length ? ' (I have: ' + listSchematics().map(x => x.name).join(', ') + ')' : ''}`)
+      const them = b.players[user]?.entity?.position, where = call.input.where || 'here'
+      const origin = where === 'base' && (cfg.spot || S.places.find(p => p.id === cfg.at)) || (where === 'here' && them) || them || b.entity.position
+      startBuild(cfg, s.name, where === 'here' && them ? origin : await placeOnGround(b, s.name, origin), {})
+      if (cfg.mode === 'ai') inbox(st, `YOUR OWNER ${user} asked you to build ${s.name}. A build job is started: use continueBuild and gather missing materials.`)
+      return later(b, st, `ok, building ${s.name} (${s.blocks} blocks)`)
+    } catch (e) { return later(b, st, String(e.message).slice(0, 180)) }
+  }
   if (call.name === 'ai') { setMode({ mode: 'ai' }); st.aiGoal = String(call.input.goal || msg).slice(0, 300); inbox(st, `YOUR OWNER ${user} asked: ${msg}`); return later(b, st, 'on it') }
   return command(b, st, cfg, user, [call.name === 'come' ? 'come' : call.name, ...(call.input.place ? String(call.input.place).split(' ') : [])], setMode)
 }

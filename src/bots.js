@@ -71,6 +71,9 @@ export function start(id) {
     tickEnd(b, version)
     b.loadPlugin(pathfinder)
     initMcData(b) // pvp, collectblock, armor manager + game data for Mindcraft's skills
+    // Mindcraft's skills expect these even outside AI mode (AI mode replaces bot.modes with the real modes)
+    b.output = ''; b.interrupt_code = false
+    b.modes = { isOn: () => false, setOn() {}, pause() {}, unpause() {}, exists: () => false, getDocs: () => '', getMiniDocs: () => '', flushBehaviorLog: () => '', behavior_log: '' }
     attachChat(b, st, cfg, { setMode: p => setMode(id, p) })
     let brain
 
@@ -206,6 +209,7 @@ export function stats() {
         players, nearby: b ? players.filter(n => b.players[n]?.entity && b.players[n].entity.position.distanceTo(e.position) < 32) : [],
         inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count, s: i.slot })) : [],
         stats: { ...(c.stats || {}), online: (c.stats?.online || 0) + (st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0) },
+        build: c.build ? { schem: c.build.schem, state: c.build.state, placed: c.build.placed || 0, remaining: c.build.remaining, mode: c.build.mode, origin: c.build.origin, missing: c.build.missing || {} } : null,
         aiNotes: st.aiNotes || '', aiHistory: (st.aiHistory || []).slice(-8), aiPaused: st.aiPaused || '',
         own: c.set || {}, onJoin: c.onJoin || '', autoMsg: c.autoMsg || null,
         spawnBed: c.spawnBed || null, lastDeath: c.lastDeath ? { ...c.lastDeath, ago: Math.round((Date.now() - c.lastDeath.t) / 1000) } : null,

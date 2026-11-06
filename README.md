@@ -33,6 +33,11 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
   - Rests when badly hurt.
   - Eats the best food it has and skips rotten flesh, raw chicken and spider eyes unless starving.
 - **Gear upgrades.** When it gets diamonds or iron, including storage blocks and the contents of a nearby chest, it crafts the best tools and armor (diamond first, then iron) and wears them. It takes only what it needs, makes room by storing junk, and puts leftovers back.
+- **Build from schematics.** Upload Litematica (`.litematic`), WorldEdit/Sponge (`.schem`) or structure-block (`.nbt`) files, also inside a `.zip`, or import from a direct link. The panel shows size and materials. A bot builds it at its base, where it stands, or at x y z, with an optional 90/180/270° turn. Two ways to build:
+  - **auto (default):** uses `/setblock` and `/fill` if the bot is op (exact and fast), otherwise places blocks by hand from its inventory.
+  - **survival:** always by hand. It reports missing materials, and in AI mode it goes to gather them. Stairs, logs and doors may face a different way than in the design.
+
+  Builds snap to solid ground at the surface. Progress is saved, so builds continue after a restart. Owners can say "wand, build house here", or paste a link in chat.
 - **Real houses.** It builds Mindcraft's blueprints at its base: a small wood house (plank floor, walls and roof, log corners, door, plus bed, chest and torches if it has them), a stone house or a dirt shelter. It clears the space and never breaks its own crafting tables, chests or furnaces.
 - **Fights back.** If a player takes it to half health, it fights them using real technique: aim, full-charge hits, jump crits, sprint knockback, its best weapon and a shield. There are no reach or damage hacks. You can set it to fight any player, only non-owners, or never.
 - **Social sense.** It notices gifts (thrown items or `/give`) and thanks the giver once, ignoring junk. It greets players who walk up, at most once per player every 10 minutes. It answers to short forms of its name ("wand" for Wander_MC3) and custom nicknames. In AI mode it remembers what players tell it.
@@ -111,6 +116,8 @@ src/
   aiplay.js    "AI plays" mode: Claude + Mindcraft command set, memory, chat
   mc/          adapted from Mindcraft: skills, world, game data, modes, action manager
   survival.js  survival play: gather, craft, store, build a base
+  schematic.js schematic parsing (.litematic/.schem/.nbt/.zip), materials, building
+  schemstore.js saved schematics and build jobs
   gear.js      gear upgrades from diamonds / iron
   combat.js    fighting back against players (legit technique)
   social.js    gifts, players walking up, nicknames
@@ -148,8 +155,18 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/all/:action`           | `roam` `idle` `rejoin` `pause` `resume` `send {place}` `chat {text}` |
 | `POST`   | `/api/aiconfig`              | `{ provider: bedrock | anthropic, region, model }` |
 | `POST`   | `/api/aikey`                 | `{ key }` (write-only; empty removes it) |
+| `POST`   | `/api/schematics`            | `{ filename, data: base64 }` or `{ url }` |
+| `DELETE` | `/api/schematics/:name`      |                         |
+| `POST`   | `/api/bots/:id/build`        | `{ schem, where: base \| here \| "x y z", rot, mode: auto \| survival \| commands }` |
+| `POST`   | `/api/bots/:id/buildstop`    |                         |
 | `POST`   | `/api/places`                | `{ name, server, x, y, z }` |
 | `DELETE` | `/api/places/:id`          |                         |
+
+## Schematics
+
+Sites like Planet Minecraft only let browsers download (they block bots), so download the file in your browser and upload it in the panel's **Schematics** box. Direct links (GitHub, Discord, your own host) can be imported by link. Old MCEdit `.schematic` files from before 1.13 aren't supported: open them in Litematica or WorldEdit and save as `.litematic` or `.schem`.
+
+For exact builds, op the bot on your server (`/op <botname>`) and leave the build mode on **auto**. It then places everything with commands, including stair directions, redstone and water. Without op it builds by hand and needs the materials.
 
 ## Chat commands
 

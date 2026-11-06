@@ -59,6 +59,12 @@ button.g{background:none;border-color:transparent;color:var(--dim)}button.g:hove
 <button onclick="addPlace()">Save place</button></div>
 <div id="places"></div>
 
+<h2>Schematics</h2><div class="card">
+<div class="row"><input type="file" id="sf" accept=".zip,.litematic,.schem,.nbt" style="width:auto"><button onclick="uploadSchem()">Upload</button>
+<span class="dim sm">or</span><input id="su" class="w-host" style="width:320px" placeholder="direct link to a .zip / .litematic / .schem"><button onclick="importSchem()">Import link</button><span id="sst" class="dim sm"></span></div>
+<div class="hint">Litematica (.litematic), WorldEdit/Sponge (.schem) and structure (.nbt) files, also inside a .zip. Sites like Planet Minecraft block bots: download the file in your browser, then upload it here. Owners can also say in chat "wand, build &lt;name&gt; here".</div>
+<div id="schems" style="margin-top:10px"></div></div>
+
 <h2>AI chat</h2><div class="card">
 <div class="row"><select id="aip" onchange="aiDraw()"><option value="bedrock">Amazon Bedrock</option><option value="anthropic">Anthropic API</option></select>
 <span id="aib" class="row"><input id="air" style="width:130px" placeholder="us-east-1"></span>
@@ -114,11 +120,19 @@ function drawSet(){$('set').innerHTML=F.map(f=>field(f,S.set[f[0]],'c_')).join('
 let aiShown=0
 function aiDraw(){const p=$('aip').value;$('aib').hidden=p!='bedrock';$('aka').hidden=p!='anthropic'}
 function saveAi(){api('aiconfig',{provider:$('aip').value,region:v('air'),model:v('aim')}).then(()=>aiShown=0)}
+async function uploadSchem(){const f=$('sf').files[0];if(!f)return alert('choose a file');$('sst').textContent='uploading…'
+ const data=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.readAsDataURL(f)})
+ const j=await api('schematics',{filename:f.name,data});$('sst').textContent=j&&j.name?'added '+j.name:'';$('sf').value=''}
+async function importSchem(){const u=v('su');if(!u)return;$('sst').textContent='downloading…';const j=await api('schematics',{url:u});$('sst').textContent=j&&j.name?'added '+j.name:'';if(j&&j.name)su.value=''}
+function drawSchems(){$('schems').innerHTML=(S.schematics||[]).map(s=>`<div class="row" style="padding:6px 0;border-top:1px solid var(--line)"><b>${esc(s.name)}</b><span class="dim sm">${s.size.x}×${s.size.y}×${s.size.z} · ${s.blocks} blocks · ${esc(s.format)}</span><span class="sp"></span>
+ <span class="dim sm" title="materials">${Object.entries(s.materials).slice(0,5).map(([k,n])=>n+' '+esc(k)).join(', ')}${Object.keys(s.materials).length>5?'…':''}</span>
+ <button onclick="confirm('Delete schematic ${esc(s.name)}?')&&api('schematics/'+encodeURIComponent('${esc(s.name)}'),null,'DELETE')">✕</button></div>`).join('')||'<span class="dim sm">No schematics yet.</span>'}
 function saveKey(){const k=v('aik');k&&api('aikey',{key:k}).then(j=>{if(j)aik.value=''})}
 function saveSet(){const o={};F.forEach(f=>o[f[0]]=read(f,'c_'));api('settings',o).then(()=>setDrawn=0)}
 
 const d=i=>draft[i]||={}
 function setD(i,k,x){d(i)[k]=x;if(k=='mode'||k=='place')render()}
+const _d=d
 function tab(i,t){tabs[i]=t;localStorage.tabs=JSON.stringify(tabs);render()}
 
 function paneOverview(b){const st=b.stats||{}
@@ -145,6 +159,14 @@ function paneControl(b){const i=b.id,dr=d(i),mode=dr.mode??b.mode,srv=srvOf(b)
  return `<div class="row"><select onchange="setD('${i}','mode',this.value)">${opts(MODES,mode)}</select>${pick}<button class="p" onclick="applyMode('${i}')">Apply</button>
   <span class="sp"></span><button onclick="here('${i}')">Save its spot as a place</button></div>
   <div class="hint">${esc(MODE_HELP[mode])}</div>
+  <h3 style="margin-top:14px">Build a schematic</h3>
+  ${b.build&&b.build.state!=='done'?`<div class="sm">${b.build.state==='waiting'?'⏸':'🔨'} <b>${esc(b.build.schem)}</b> at ${b.build.origin.x} ${b.build.origin.y} ${b.build.origin.z} · ${b.build.placed} placed${b.build.remaining!=null?' · '+b.build.remaining+' to go':''} · ${esc(b.build.mode)} ${Object.keys(b.build.missing).length?'<span class="dim">· missing '+Object.entries(b.build.missing).slice(0,5).map(([k,n])=>n+' '+esc(k)).join(', ')+'</span>':''}
+   <button onclick="api('bots/${i}/buildstop',{})" style="margin-left:8px">Stop build</button></div>`:b.build&&b.build.state==='done'&&!b.build.stopped?`<div class="sm dim">Last build: ${esc(b.build.schem)} finished (${b.build.placed} placed).</div>`:''}
+  <div class="row" style="margin-top:6px"><select onchange="d('${i}').bs=this.value"><option value="">schematic…</option>${(S.schematics||[]).map(s=>`<option ${s.name==dr.bs?'selected':''}>${esc(s.name)}</option>`).join('')}</select>
+   <select onchange="d('${i}').bw=this.value;render()">${opts({base:'at its base',here:'where it stands',xyz:'at x y z…'},dr.bw||'base')}</select>${dr.bw==='xyz'?`<input style="width:130px" placeholder="x y z" value="${esc(dr.bxyz||'')}" oninput="d('${i}').bxyz=this.value">`:''}
+   <select onchange="d('${i}').br=this.value">${opts({0:'no turn',1:'turn 90°',2:'turn 180°',3:'turn 270°'},dr.br||'0')}</select>
+   <select onchange="d('${i}').bm=this.value">${opts({auto:'auto (commands if op)',survival:'place by hand',commands:'/setblock (needs op)'},dr.bm||'auto')}</select>
+   <button class="p" onclick="startBuild('${i}')">Build</button></div>
   <div class="row" style="margin-top:12px"><input class="w-chat" placeholder="say in chat as ${esc(b.name)} (or a /command)…" value="${esc(dr.chat||'')}" oninput="d('${i}').chat=this.value" onkeydown="event.key=='Enter'&&sendChat('${i}')"><button onclick="sendChat('${i}')">Say</button></div>`}
 
 function paneInv(b){const i=b.id
@@ -172,6 +194,7 @@ function applyMode(i){const b=S.bots.find(x=>x.id==i),dr=d(i),mode=dr.mode??b.mo
  if(PLACE_MODES.includes(mode)){const p=dr.place??(b.at||'');if(p=='xyz')body.xyz=dr.xyz||'';else if(p)body.place=p;else body.here=true}
  if(mode=='follow')body.player=dr.player??b.follow
  api(`bots/${i}/mode`,body).then(j=>{if(j){delete dr.mode;delete dr.place;delete dr.player;delete dr.xyz}})}
+function startBuild(i){const dr=d(i);if(!dr.bs)return alert('pick a schematic');api(`bots/${i}/build`,{schem:dr.bs,where:dr.bw==='xyz'?(dr.bxyz||''):(dr.bw||'base'),rot:+(dr.br||0),mode:dr.bm||'auto'})}
 function sendChat(i){const t=(d(i).chat||'').trim();t&&api(`bots/${i}/chat`,{text:t}).then(j=>{if(j)d(i).chat=''})}
 
 const TABS={overview:'Overview',control:'Control',inv:'Inventory',settings:'Settings',log:'Log'}
@@ -193,6 +216,7 @@ function card(b){const c=b.paused?'#555':b.up?'var(--ok)':b.task=='offline'||b.t
 function saveEdit(i){api(`bots/${i}/edit`,{name:v('e_n'),address:v('e_h'),version:$('e_v').value}).then(j=>{if(j){editing='';render()}})}
 
 function render(){if(!S)return
+ drawSchems()
  // remember unsaved per-bot settings inputs before redrawing
  document.querySelectorAll('[id^="b"][id*="_"]').forEach(el=>{const m=el.id.match(/^b(\w+?)_(\w+)$/);if(m&&F.some(f=>f[0]==m[2])){const f=F.find(f=>f[0]==m[2]),x=read(f,`b${m[1]}_`),b=S.bots.find(b=>b.id==m[1]);if(b&&String(x)!==String({...S.set,...b.own}[m[2]]))d(m[1])['s_'+m[2]]=x;else delete d(m[1])['s_'+m[2]]}})
  if(!aiShown&&!document.activeElement.closest?.('#aip,#air,#aim')){$('aip').value=S.ai.provider;$('air').value=S.ai.region;$('aim').value=S.ai.model;aiDraw();aiShown=1}
