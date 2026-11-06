@@ -5,7 +5,7 @@ import crypto from 'node:crypto'
 
 // shared behaviour for all bots; editable from the panel
 export const DEFAULTS = {
-  combat: 'flee',     // hostile mobs: 'flee' | 'fight' | 'ignore'  (guards always fight)
+  combat: 'auto',     // hostile mobs: 'auto' (fight when armed + armored) | 'flee' | 'fight' | 'ignore'  (guards always fight)
   guardR: 12,         // how far a guard looks for mobs
   roam: 15, homeR: 6, // wander radius when roaming / around a place
   farmR: 10,          // how far a farmer looks for crops around its place
@@ -58,10 +58,12 @@ function apply(d) {
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
     spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
     set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats, lastDeath: b.lastDeath, spawnBed: b.spawnBed,
-    aiMemory: b.aiMemory, aiFacts: b.aiFacts, house: b.house, build: b.build,
+    aiMemory: b.aiMemory, aiFacts: b.aiFacts, house: b.house, build: b.build, mem: b.mem,
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'
+  if (set.combat === 'flee' && !set.combatChosen) set.combat = 'auto' // old default -> smarter new default
+  for (const x of bots) if (x.set?.combat === 'flee' && !x.set.combatChosen) x.set.combat = 'auto'
   Object.assign(S, { bots, places, keyHash: d.keyHash || '', aiKey: d.aiKey || '', ai: d.ai || {}, set: { ...DEFAULTS, ...set } })
 }
 

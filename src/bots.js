@@ -12,6 +12,7 @@ import { stopAI, inbox } from './aiplay.js'
 import { fightPlayer, watchAttackers } from './combat.js'
 import { watchGifts, watchApproach } from './social.js'
 import { upgradeGear, canUpgrade, VALUABLE } from './gear.js'
+import { attachStorageMemory, memorySummary, extraValuables } from './storage.js'
 import * as skills from './mc/skills.js'
 
 const GREET = ['hey {p}, need something?', "yo {p}, what's up?", 'hi {p}! need anything?', 'oh hey {p}']
@@ -73,6 +74,7 @@ export function start(id) {
     initMcData(b) // pvp, collectblock, armor manager + game data for Mindcraft's skills
     // Mindcraft's skills expect these even outside AI mode (AI mode replaces bot.modes with the real modes)
     b.output = ''; b.interrupt_code = false
+    b._wbCfg = () => cfgOf(id); b._wbState = st
     b.modes = { isOn: () => false, setOn() {}, pause() {}, unpause() {}, exists: () => false, getDocs: () => '', getMiniDocs: () => '', flushBehaviorLog: () => '', behavior_log: '' }
     attachChat(b, st, cfg, { setMode: p => setMode(id, p) })
     let brain
@@ -118,6 +120,7 @@ export function start(id) {
 // fighting back, gifts and greetings (once per connection)
 function attachWatchers(b, st, id) {
   st.watching = true
+  try { attachStorageMemory(b, () => cfgOf(id)) } catch (e) { log(st, 'event', 'storage memory unavailable: ' + e.message) } // remember every container it opens
   b.once('end', () => { st.watching = false })
   const cfgNow = () => cfgOf(id)
   watchAttackers(b, st, () => cfgNow() && eff(cfgNow()), name => {
@@ -210,6 +213,7 @@ export function stats() {
         inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count, s: i.slot })) : [],
         stats: { ...(c.stats || {}), online: (c.stats?.online || 0) + (st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0) },
         build: c.build ? { schem: c.build.schem, state: c.build.state, placed: c.build.placed || 0, remaining: c.build.remaining, mode: c.build.mode, origin: c.build.origin, missing: c.build.missing || {} } : null,
+        memory: b?.entity ? memorySummary(b, c) : [], carrying: b?.entity ? extraValuables(b) : {}, freeSlots: b?.entity ? b.inventory.emptySlotCount() : null,
         aiNotes: st.aiNotes || '', aiHistory: (st.aiHistory || []).slice(-8), aiPaused: st.aiPaused || '',
         own: c.set || {}, onJoin: c.onJoin || '', autoMsg: c.autoMsg || null,
         spawnBed: c.spawnBed || null, lastDeath: c.lastDeath ? { ...c.lastDeath, ago: Math.round((Date.now() - c.lastDeath.t) / 1000) } : null,

@@ -84,7 +84,7 @@ const MODE_HELP={ai:'Claude decides every step: it sees health, inventory, nearb
  survive:'Plays survival: chops wood, crafts tools, mines stone, places a chest, builds a small hut at its base, makes a bed from sheep wool and sets its respawn there, stores loot, hunts when hungry and stays inside at night. It digs and places blocks.',
  idle:'Stands still and looks around (AFK).'}
 const PLACE_MODES=['stay','guard','farm','survive','auto','ai']
-const F=[['combat','Hostile mobs','sel',{flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
+const F=[['combat','Hostile mobs','sel',{auto:'fight if geared, else run',flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
  ['farmR','Farm radius','num'],['reconnect','Reconnect delay (s)','num'],['view','View distance','sel',{tiny:'tiny',short:'short',normal:'normal'}],
  ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['gear','Wear best armor & weapon','chk'],['pickup','Pick up items','chk'],
  ['sleep','Sleep in beds at night','chk'],['recover','Get items back after dying','chk'],['setSpawn','Set respawn at base bed','chk'],['nightHome','Stay home at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
@@ -142,6 +142,8 @@ function paneOverview(b){const st=b.stats||{}
   ${b.mode=='ai'?`<h3 style="margin-top:14px">AI${b.aiPaused?' · <span style="color:var(--warn)">'+esc(b.aiPaused)+', using the routine</span>':''}</h3>
    <div class="sm">${b.aiNotes?'<b class="dim">plan:</b> '+esc(b.aiNotes):'<span class="dim">no plan notes yet</span>'}</div>
    <div class="log" style="margin-top:6px;max-height:160px">${b.aiHistory.map(h=>`<div class="${/-> failed/.test(' -> '+h.result)||/^failed/.test(h.result)?'l-event':''}">${esc(h.action)} → ${esc(h.result)}</div>`).join('')||'<span class="dim">no decisions yet</span>'}</div>`:''}
+  <h3 style="margin-top:14px">Storage &amp; memory</h3><div class="sm">${b.freeSlots!=null?b.freeSlots+' free slots':''}${Object.keys(b.carrying||{}).length?' · carrying valuables: '+Object.entries(b.carrying).map(([k,n])=>n+' '+esc(k)).join(', '):''}</div>
+  <div class="sm dim" style="margin-top:4px">${(b.memory||[]).map(l=>'• '+esc(l)).join('<br>')||'nothing remembered yet (it learns chests as it opens them)'}</div>
   <h3 style="margin-top:14px">Respawn &amp; death</h3><div class="grid">
    <div><b>respawn point</b>${b.spawnBed?'bed at '+esc(b.spawnBed.replace(/,/g,' ')):'world spawn'+(b.worldSpawn?' ('+b.worldSpawn.join(' ')+')':'')}</div>
    <div><b>last death</b>${b.lastDeath?esc(b.lastDeath.x+' '+b.lastDeath.y+' '+b.lastDeath.z)+' · '+fmt(b.lastDeath.ago)+' ago':'–'}</div>

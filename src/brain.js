@@ -8,6 +8,7 @@ import { ensureAI, stopAI } from './aiplay.js'
 import { fightPlayer } from './combat.js'
 import { upgradeGear } from './gear.js'
 import { runBuild } from './schemstore.js'
+import { storeValuables, tidyInventory, extraValuables } from './storage.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -149,7 +150,10 @@ export async function think(b, st, cfg) {
   const buddy = mode === 'follow' && cfg.follow && b.players[cfg.follow]?.entity
   const mob = b.nearestEntity(x => x.type === 'hostile' && (near(b, x, mode === 'guard' ? c.guardR : 10) || (buddy && c.combat === 'fight' && x.position.distanceTo(buddy.position) < 8)))
   const creeper = mob?.name === 'creeper' && near(b, mob, 7)
-  const style = creeper ? 'flee' : mode === 'guard' ? 'fight' : c.combat // never melee a creeper
+  const armed = b.inventory.items().some(i => /_(sword|axe)$/.test(i.name) && !/^(wooden|golden)_/.test(i.name))
+  const armored = [5, 6, 7, 8].filter(s => /^(iron|diamond|netherite|chainmail)_/.test(b.inventory.slots[s]?.name || '')).length >= 2
+  const auto = armed && armored && b.health > 10 ? 'fight' : armed && b.health > 14 && mob && !/creeper|witch|enderman|warden/.test(mob.name) ? 'fight' : 'flee'
+  const style = creeper ? 'flee' : mode === 'guard' ? 'fight' : c.combat === 'auto' ? auto : c.combat // never melee a creeper
   if (mob && style !== 'ignore') {
     if (style === 'fight' && b.health > 6) {
       if (st.target !== mob.id) { st.target = mob.id; if (c.gear) await holdWeapon(b).catch(() => {}) }
@@ -216,7 +220,14 @@ export async function think(b, st, cfg) {
     if (!b.pathfinder.isMoving()) { st.task = 'night, staying home'; if (chance(0.3)) b.look(e.yaw + rnd(-1, 1), 0); return }
   }
 
-  // 7. wear the best armor (checked every ~15s)
+  // 7. storage habits (every 3 min): don't carry valuables around, keep free slots
+  if (Date.now() - (st.storedAt || 0) > 180e3 && mode !== 'follow') {
+    st.storedAt = Date.now()
+    if (Object.keys(extraValuables(b)).length) return run('storing valuables', async () => st.log?.push({ t: Date.now(), type: 'event', text: await storeValuables(b, cfg, home) }))
+    if (b.inventory.emptySlotCount() <= 5) return run('tidying inventory', async () => st.log?.push({ t: Date.now(), type: 'event', text: await tidyInventory(b, cfg, home) }))
+  }
+
+  // 7b. wear the best armor (checked every ~15s)
   if (c.gear && Date.now() - (st.geared || 0) > 15e3) { st.geared = Date.now(); await gearUp(b).catch(() => {}) }
 
   // 8. sleep at night if a bed is close (not while following someone)

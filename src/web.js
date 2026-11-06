@@ -24,7 +24,7 @@ function clean(k, v) {
   if (k === 'goal') return String(v || '').trim().slice(0, 300)
   if (typeof DEFAULTS[k] === 'number') return Math.max(0, Math.min(64, +v || 0))
   if (k === 'view') return ['tiny', 'short', 'normal'].includes(v) ? v : 'tiny'
-  if (k === 'combat') return ['flee', 'fight', 'ignore'].includes(v) ? v : 'flee'
+  if (k === 'combat') return ['auto', 'flee', 'fight', 'ignore'].includes(v) ? v : 'auto'
   if (k === 'persona') return String(v || '').replace(/\s+/g, ' ').trim().slice(0, 200)
   if (k === 'owners') return String(v || '').split(',').map(s => s.trim()).filter(validName).slice(0, 20).join(', ')
   return DEFAULTS[k]
@@ -117,6 +117,7 @@ async function handle(q, body, send) {
   if (what === 'settings') { // shared behaviour for all bots
     const old = { ...S.set }
     for (const k in DEFAULTS) if (k in body) S.set[k] = clean(k, body[k])
+    if ('combat' in body) S.set.combatChosen = true // an explicit choice is kept as is
     save()
     if (old.view !== S.set.view) S.bots.forEach(b => restart(b.id)) // needs a rejoin
     else for (const st of live.values()) st.moves?.()
@@ -185,6 +186,7 @@ async function handle(q, body, send) {
         cfg.set ||= {}
         const v = body[k] === null ? null : clean(k, body[k])
         if (v === null || v === S.set[k]) delete cfg.set[k]; else cfg.set[k] = v
+        if (k === 'combat' && v !== null && v !== S.set[k]) cfg.set.combatChosen = true
       }
       if (cfg.set && !Object.keys(cfg.set).length) delete cfg.set
       save()

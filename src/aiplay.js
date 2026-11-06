@@ -17,6 +17,7 @@ import { McAgent } from './mc/agent.js'
 import { BLUEPRINTS, housePlan, buildHouse } from './mc/build.js'
 import { upgradeGear, canUpgrade } from './gear.js'
 import { listSchematics, startBuild, runBuild, placeOnGround } from './schemstore.js'
+import { whereIs, storeValuables, tidyInventory, packIntoBundle, memorySummary, extraValuables } from './storage.js'
 
 const wait = ms => new Promise(r => setTimeout(r, ms))
 const MAX_MSGS = 24           // conversation turns kept before older ones are folded into memory
@@ -118,6 +119,10 @@ const COMMANDS = [
   { name: 'workOnBase', description: 'Let the built-in routine do the next steps of setting up your base: crafting table, stone tools, chest, a small hut with a roof, bed, torch, storing loot.', timeout: 4,
     act: async (b, x, ctx) => { for (let i = 0; i < 3 && !b.interrupt_code; i++) { if (await survive(b, ctx.st, ctx.cfg, ctx.c, ctx.home) === 'idle') { skills.log(b, 'The base is finished.'); return } } skills.log(b, ctx.st.task.replace(/^survival: /, 'Base routine: ')) } },
   { name: 'setBase', description: 'Make where you stand your base (home for sleeping, storage, building).', run: (b, a, x, ctx) => { const p = b.entity.position.floored(); ctx.cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; delete ctx.cfg.at; save(); return `Base set at ${p.x} ${p.y} ${p.z}.` } },
+  { name: 'whereIs', description: 'Find where an item is: your inventory, chests/barrels/shulkers you have opened before, or your ender chest.', params: [P('item', 'string', 'Item name, e.g. diamond, iron_ingot, oak_log')], run: (b, a, { item }, ctx) => whereIs(b, ctx.cfg, item) },
+  { name: 'storeValuables', description: 'Put valuables you are carrying (diamonds, gold, storage blocks, enchanted books, golden apples...) into your ender chest or the chest at your base, keeping a few you need.', timeout: 3, act: async (b, x, ctx) => skills.log(b, await storeValuables(b, ctx.cfg, ctx.home)) },
+  { name: 'tidyInventory', description: 'Free up inventory space: store or drop junk, pack small stacks into a bundle and bulk into a shulker box if you have them.', timeout: 3, act: async (b, x, ctx) => skills.log(b, await tidyInventory(b, ctx.cfg, ctx.home)) },
+  { name: 'packBundle', description: 'Put small odd stacks into a bundle you carry to free slots.', act: async (b, x, ctx) => skills.log(b, await packIntoBundle(b, ctx.st)) },
   { name: 'listSchematics', description: 'List the building schematics (saved designs) you can build, with sizes and materials.', run: () => 'SCHEMATICS: ' + (listSchematics().map(s => `${s.name} (${s.size.x}x${s.size.y}x${s.size.z}, ${s.blocks} blocks; needs ${Object.entries(s.materials).slice(0, 6).map(([k, v]) => v + ' ' + k).join(', ')})`).join('; ') || 'none uploaded yet') },
   { name: 'buildSchematic', description: 'Start building a saved schematic (design). where: base, here, or "x y z". rot: 0-3 quarter turns. Uses /setblock if you are op, otherwise places blocks from your inventory. Then call continueBuild until finished.', params: [P('name', 'string', 'Schematic name'), P('where', 'string', 'base, here, or x y z'), P('rot', 'int', 'Quarter turns 0-3')], timeout: 6,
     act: async (b, { name, where = 'base', rot = 0 }, ctx) => {
@@ -180,6 +185,7 @@ Talking: if a player talks to you, answer with the chat command, briefly and cas
 People: use remember for things players tell you that matter later (their name, their base, what they want from you, promises). Respect what they told you before.
 Gifts: when a player gives you items, thank them and use the items (wear better armor, hold better tools, eat good food).
 - Storage blocks hold 9 items: 1 diamond_block = 9 diamonds, 1 iron_block = 9 iron_ingot, 1 gold_block = 9 gold_ingot. upgradeGear converts them and crafts the best tools and armor for you.
+- Storage: keep valuables safe in your ender chest (survives death) or at base, not in your pockets while exploring. Keep the inventory tidy (tidyInventory), use shulker boxes and bundles if you have them, and use whereIs instead of guessing where things are.
 - Never put diamonds, iron, storage blocks or good gear into a chest while you could still make better tools or armor with them. Always wear the best armor and hold the best weapon you have.
 Dropped items: if items are lying near you (shown in your status), pick them up with pickupItems, especially your own things after dying.` },
     { type: 'text', text: `Your goal: ${st.aiGoal || cfg.set?.goal || S.set.goal || DEFAULT_GOAL}\nSummarized memory: '${cfg.aiMemory || ''}'` +
@@ -194,6 +200,11 @@ function status(b, agent, st, cfg) {
   let s = stats(b, agent) + '\n' + inventory(b)
   if (home) s += `\n- Base: ${home.x} ${home.y} ${home.z}`
   if (canUpgrade(b)) s += '\n- You have materials for better tools/armor: use upgradeGear now.'
+  const free = b.inventory.emptySlotCount(), extra = extraValuables(b)
+  s += `\n- Free inventory slots: ${free}${free <= 5 ? ' (almost full: use tidyInventory)' : ''}`
+  if (Object.keys(extra).length) s += `\n- You are carrying valuables: ${Object.entries(extra).map(([k, v]) => v + ' ' + k).join(', ')}. Don't wander around with them: use storeValuables.`
+  const memo = memorySummary(b, cfg)
+  if (memo.length) s += '\n- You remember: ' + memo.join(' | ')
   const job = cfg.build
   if (job && job.state !== 'done') s += `\n- Building schematic ${job.schem} at ${job.origin.x} ${job.origin.y} ${job.origin.z}: ${job.placed || 0} placed${job.remaining != null ? ', ' + job.remaining + ' to go' : ''}${Object.keys(job.missing || {}).length ? '. Missing: ' + Object.entries(job.missing).slice(0, 6).map(([k, v]) => v + ' ' + k).join(', ') + ' (gather or craft them, then continueBuild)' : ' (use continueBuild)'}`
   const items = {}
@@ -284,6 +295,11 @@ async function run(b, st, cfg) {
     }
     st.aiPaused = ''
     if (!me.agent.isIdle()) { await wait(500); continue } // a mode is doing something
+    if (Date.now() - (st.storedAt || 0) > 180e3) {
+      st.storedAt = Date.now()
+      const job = Object.keys(extraValuables(b)).length ? () => storeValuables(b, cfg, me.ctx.home) : b.inventory.emptySlotCount() <= 5 ? () => tidyInventory(b, cfg, me.ctx.home) : null
+      if (job) { let msg = ''; await me.agent.actions.runAction('action:storage', async () => { msg = await job() }, { timeout: 3 }); inbox(st, 'Storage habit: ' + (msg || 'done')); continue }
+    }
     // next user message: last command's result + news + fresh status
     const parts = []
     if (pendingTool) parts.push({ type: 'tool_result', tool_use_id: pendingTool.id, content: pendingTool.output || '(no output)' })
