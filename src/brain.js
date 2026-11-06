@@ -2,8 +2,8 @@
 // important thing to do: survive, gear up, sleep, then whatever its mode says.
 import pf from 'mineflayer-pathfinder'
 import { Vec3 } from 'vec3'
-import { S, eff } from './store.js'
-import { survive } from './survival.js'
+import { S, eff, save } from './store.js'
+import { survive, goto } from './survival.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -62,6 +62,13 @@ export function homeOf(cfg) {
   return p ? { x: p.x, y: p.y, z: p.z, label: p.name } : cfg.spot ? { ...cfg.spot, label: cfg.spot.label || `${cfg.spot.x} ${cfg.spot.y} ${cfg.spot.z}` } : null
 }
 
+// best food to eat now: most saturation, skipping bad food unless starving
+const BAD_FOOD = new Set(['rotten_flesh', 'spider_eye', 'poisonous_potato', 'pufferfish', 'chicken', 'suspicious_stew'])
+function bestFood(b) {
+  const foods = b.inventory.items().filter(i => b.registry.foodsByName[i.name] && (b.food < 6 || !BAD_FOOD.has(i.name)))
+  return foods.sort((x, y) => (b.registry.foodsByName[y.name].saturation || 0) - (b.registry.foodsByName[x.name].saturation || 0))[0]
+}
+
 function go(b, st, goal, task, dynamic = false) { st.task = task; b.pathfinder.setGoal(goal, dynamic) }
 function hold(b, key, ms) { b.setControlState(key, true); setTimeout(() => b.setControlState(key, false), ms) }
 const label = m => m.displayName || m.name
@@ -81,16 +88,17 @@ export async function think(b, st, cfg) {
   else if (st.swim) b.setControlState('jump', false)
   st.swim = e.isInWater
 
-  // 1. eat when hungry
-  if (c.eat && b.food < 14) {
-    const food = b.inventory.items().find(i => b.registry.foodsByName[i.name])
-    if (food) return run('eating', async () => { await b.equip(food, 'hand'); await b.consume() })
+  // 1. eat when hungry, or when hurt and not full (food heals)
+  if (c.eat && (b.food < 14 || (b.health < 14 && b.food < 18))) {
+    const food = bestFood(b)
+    if (food) return run('eating ' + (food.displayName || food.name), async () => { await b.equip(food, 'hand'); await b.consume() })
   }
 
   // 2. hostile mobs: fight, flee or ignore. Guards always fight; followers also protect their player.
   const buddy = mode === 'follow' && cfg.follow && b.players[cfg.follow]?.entity
   const mob = b.nearestEntity(x => x.type === 'hostile' && (near(b, x, mode === 'guard' ? c.guardR : 10) || (buddy && c.combat === 'fight' && x.position.distanceTo(buddy.position) < 8)))
-  const style = mode === 'guard' ? 'fight' : c.combat
+  const creeper = mob?.name === 'creeper' && near(b, mob, 7)
+  const style = creeper ? 'flee' : mode === 'guard' ? 'fight' : c.combat // never melee a creeper
   if (mob && style !== 'ignore') {
     if (style === 'fight' && b.health > 6) {
       if (st.target !== mob.id) { st.target = mob.id; if (c.gear) await holdWeapon(b).catch(() => {}) }
@@ -106,10 +114,61 @@ export async function think(b, st, cfg) {
   }
   if (st.fleeing || st.target) { st.fleeing = st.target = null; b.pathfinder.stop() }
 
-  // 3. wear the best armor (checked every ~15s)
+  // 3. died recently: go back for the dropped items (they despawn after 5 minutes)
+  const death = cfg.lastDeath
+  if (death) {
+    if (!c.recover || Date.now() - death.t > 270e3 || b.game.dimension !== death.dim) { delete cfg.lastDeath; save() }
+    else if (!st.recovering) {
+      st.recovering = true
+      return run('getting my stuff back', async () => {
+        try {
+          const spot = new Vec3(death.x, death.y, death.z)
+          await goto(b, new goals.GoalNear(death.x, death.y, death.z, 1), 90e3)
+          for (let end = Date.now() + 20e3; Date.now() < end;) {
+            const it = b.nearestEntity(x => x.name === 'item' && x.position.distanceTo(spot) < 10)
+            if (!it) break
+            await goto(b, new goals.GoalNear(it.position.x, it.position.y, it.position.z, 0.5), 8e3).catch(() => {})
+          }
+          st.log?.push({ t: Date.now(), type: 'event', text: 'went back to where it died and picked up its items' })
+        } finally { delete cfg.lastDeath; save(); st.recovering = false }
+      })
+    }
+  }
+
+  // 4. badly hurt with nothing to eat: back off and let health come back
+  if (b.health < 8 && mode !== 'follow' && !bestFood(b)) {
+    if (home && e.position.distanceTo(home) > 3) return go(b, st, new goals.GoalNear(home.x, home.y, home.z, 1), 'hurt, going home')
+    b.pathfinder.stop(); st.task = 'hurt, resting'; return
+  }
+
+  // 5. respawn point: use the bed at its base so it respawns at home
+  if (c.setSpawn && home && Date.now() - (st.triedSpawn || 0) > 60e3) {
+    const bed = b.findBlock({ point: new Vec3(home.x, home.y, home.z), matching: bl => b.isABed(bl), maxDistance: 8 })
+    const key = bed && `${bed.position.x},${bed.position.y},${bed.position.z}`
+    if (!bed && cfg.spawnBed) { delete cfg.spawnBed; save() }
+    if (bed && cfg.spawnBed !== key) {
+      st.triedSpawn = Date.now()
+      return run('setting respawn point', async () => {
+        await goto(b, new goals.GoalNear(bed.position.x, bed.position.y, bed.position.z, 2), 30e3)
+        await b.activateBlock(bed)
+        await new Promise(r => setTimeout(r, 600))
+        if (b.isSleeping) await b.wake().catch(() => {})
+        cfg.spawnBed = key; save()
+        st.log?.push({ t: Date.now(), type: 'event', text: 'respawn point set at bed ' + key })
+      })
+    }
+  }
+
+  // 6. night: stay at home instead of wandering in the dark
+  if (c.nightHome && !b.time.isDay && home && (mode === 'roam' || (mode === 'survive' && st.shelterDone))) {
+    if (e.position.distanceTo(home) > 3) return go(b, st, new goals.GoalNear(home.x, home.y, home.z, 1), 'night, heading home')
+    if (!b.pathfinder.isMoving()) { st.task = 'night, staying home'; if (chance(0.3)) b.look(e.yaw + rnd(-1, 1), 0); return }
+  }
+
+  // 7. wear the best armor (checked every ~15s)
   if (c.gear && Date.now() - (st.geared || 0) > 15e3) { st.geared = Date.now(); await gearUp(b).catch(() => {}) }
 
-  // 4. sleep at night if a bed is close (not while following someone)
+  // 8. sleep at night if a bed is close (not while following someone)
   if (c.sleep && mode !== 'follow' && !b.time.isDay && Date.now() - (st.triedBed || 0) > 30e3) {
     const bed = b.findBlock({ matching: bl => b.isABed(bl), maxDistance: 24 })
     if (bed) {
@@ -121,13 +180,13 @@ export async function think(b, st, cfg) {
     }
   }
 
-  // 5. pick up dropped items nearby (not while following)
+  // 9. pick up dropped items nearby (not while following)
   if (c.pickup && mode !== 'follow' && !b.pathfinder.isMoving()) {
     const item = b.nearestEntity(x => x.name === 'item' && near(b, x, 8) && (!home || x.position.distanceTo(home) < c.homeR + 8))
     if (item && b.inventory.emptySlotCount() > 0) return go(b, st, new goals.GoalNear(item.position.x, item.position.y, item.position.z, 0.5), 'picking up an item')
   }
 
-  // 6. mode
+  // 10. mode
   const player = c.lookPlayers && b.nearestEntity(x => x.type === 'player' && near(b, x, 8))
   if (player && chance(0.6)) b.lookAt(player.position.offset(0, 1.6, 0))
 

@@ -10,6 +10,9 @@ export const DEFAULTS = {
   roam: 15, homeR: 6, // wander radius when roaming / around a place
   farmR: 10,          // how far a farmer looks for crops around its place
   lookPlayers: true, eat: true, gear: true, pickup: true, sleep: true, fidget: true, sprint: false,
+  recover: true,      // after dying, go back for the dropped items
+  setSpawn: true,     // use the bed at its base as respawn point
+  nightHome: true,    // stay at home at night (roam / survival with a finished hut)
   replies: true,      // answer when someone says the bot's name
   greet: false,       // say hi when players join
   owners: '',         // comma-separated player names allowed to use !commands in chat
@@ -44,7 +47,7 @@ function apply(d) {
     id: b.id || newId(), name: b.name, host: b.host || d.host || 'localhost', port: b.port || d.port || 25565,
     version: b.version || d.set?.version || 'auto', at: places.find(p => p.id === b.at || p.name === b.at)?.id,
     spot: b.spot, follow: b.follow, paused: b.paused, mode: b.mode || (b.at ? 'stay' : 'roam'),
-    set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats,
+    set: b.set, onJoin: b.onJoin, autoMsg: b.autoMsg, stats: b.stats, lastDeath: b.lastDeath, spawnBed: b.spawnBed,
   }))
   const { version, flee, ...set } = d.set || {}
   if (flee === false && !set.combat) set.combat = 'ignore'

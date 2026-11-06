@@ -9,12 +9,12 @@ import { save } from './store.js'
 const { goals, Movements } = pf
 const wait = ms => new Promise(r => setTimeout(r, ms))
 // walk to a goal, giving up after `ms` so one bad path can't freeze the bot
-function goto(b, goal, ms = 25000) {
+export function goto(b, goal, ms = 25000) {
   let t
   return Promise.race([b.pathfinder.goto(goal), new Promise((_, no) => { t = setTimeout(() => { b.pathfinder.stop(); no(new Error('could not get there in time')) }, ms) })]).finally(() => clearTimeout(t))
 }
 const ANIMALS = new Set(['cow', 'pig', 'chicken', 'sheep', 'rabbit', 'mooshroom'])
-const JUNK = /^(dirt|gravel|sand|cobbled_deepslate|andesite|diorite|granite|tuff|netherrack|rotten_flesh|.*_seeds|.*_sapling|poppy|dandelion|stick|flint|bone|string|feather|leather|apple|.*wool)$/
+const JUNK = /^(dirt|gravel|sand|cobbled_deepslate|andesite|diorite|granite|tuff|netherrack|rotten_flesh|.*_seeds|.*_sapling|poppy|dandelion|flint|bone|string|feather|leather)$/
 const KEEP_COBBLE = 32
 
 // base layout around the centre (dx, dz): table, chest and torch inside a 5x5 hut
@@ -129,6 +129,16 @@ async function placeInBase(b, name, home, pref) {
 
 const nearBase = (b, base, blockName) => b.findBlock({ point: new Vec3(base.x, base.y, base.z), matching: b.registry.blocksByName[blockName]?.id ?? -1, maxDistance: 6 })
 
+// chase and kill an animal, then pick up what it dropped
+async function hunt(b, st, prey) {
+  const weapon = b.inventory.items().find(i => /_sword$|_axe$/.test(i.name)); if (weapon) await b.equip(weapon, 'hand')
+  for (let i = 0; i < 20 && prey.isValid; i++) {
+    if (prey.position.distanceTo(b.entity.position) > 3) await goto(b, new goals.GoalFollow(prey, 2), 6000).catch(() => {})
+    await b.lookAt(prey.position.offset(0, prey.height / 2, 0), true); b.attack(prey); await wait(650)
+  }
+  st.count('kills'); return collectNear(b, prey.position)
+}
+
 // one step of survival play. Returns a promise (caller marks the bot busy while it runs).
 export async function survive(b, st, cfg, c, home) {
   // base: its saved place/spot, or where it is now
@@ -139,15 +149,7 @@ export async function survive(b, st, cfg, c, home) {
   // food: hunt an animal if hungry with nothing to eat
   if (b.food < 12 && !b.inventory.items().some(i => b.registry.foodsByName[i.name])) {
     const prey = b.nearestEntity(x => ANIMALS.has(x.name) && x.position.distanceTo(b.entity.position) < 32)
-    if (prey) {
-      task('hunting ' + prey.name)
-      const sword = b.inventory.items().find(i => /_sword$|_axe$/.test(i.name)); if (sword) await b.equip(sword, 'hand')
-      for (let i = 0; i < 20 && prey.isValid; i++) {
-        if (prey.position.distanceTo(b.entity.position) > 3) await goto(b, new goals.GoalFollow(prey, 2)).catch(() => {})
-        await b.lookAt(prey.position.offset(0, prey.height / 2, 0), true); b.attack(prey); await wait(650)
-      }
-      st.count('kills'); return collectNear(b, prey.position)
-    }
+    if (prey) { task('hunting ' + prey.name + ' for food'); return hunt(b, st, prey) }
   }
 
   const logs = count(b, /_log$/), plank = count(b, /_planks$/), cobble = count(b, 'cobblestone')
@@ -200,6 +202,20 @@ export async function survive(b, st, cfg, c, home) {
       try { if (await placeAt(b, /^cobblestone$|_planks$/, pos)) st.count('placed') } catch { st.badCells.add(o.join()) } // skip cells it can't fill
     }
     return
+  }
+
+  st.shelterDone = true
+
+  // bed inside the hut, so it can sleep and respawn at home (needs 3 wool of one colour from sheep)
+  const bedHere = b.findBlock({ point: new Vec3(home.x, home.y, home.z), matching: bl => b.isABed(bl), maxDistance: 6 })
+  if (!bedHere && Date.now() > (st.noSheepUntil || 0)) {
+    const bedItem = b.inventory.items().find(i => /_bed$/.test(i.name))
+    if (bedItem) { task('placing a bed'); return placeInBase(b, bedItem.name, home, [1, 0]) }
+    const wool = b.inventory.items().find(i => /_wool$/.test(i.name) && count(b, i.name) >= 3)
+    if (wool) { if (plank < 3) await planks(b, 3); task('crafting a bed'); return craft(b, st, wool.name.replace(/_wool$/, '_bed')) }
+    const sheep = b.nearestEntity(x => x.name === 'sheep' && x.position.distanceTo(b.entity.position) < 40)
+    if (sheep) { task(`getting wool for a bed (${count(b, /_wool$/)}/3)`); return hunt(b, st, sheep) }
+    st.noSheepUntil = Date.now() + 5 * 60e3 // no sheep around: try again in 5 minutes
   }
 
   // torch inside, if it found coal

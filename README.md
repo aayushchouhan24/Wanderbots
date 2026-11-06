@@ -16,7 +16,14 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
   - **Farm:** harvests and replants wheat, carrots, potatoes and beetroot around a place.
   - **Survival:** plays the early game (see below).
   - **Idle:** stands still (AFK).
-- **Survival mode.** The bot chops trees and crafts planks, sticks and a crafting table. It makes a wooden pickaxe, then mines stone for a stone pickaxe, sword and axe. It places a chest and builds a 5×5 hut with a door and roof at its base, adds a torch if it finds coal, stores loot in the chest and hunts animals when hungry. It works step by step from its inventory, so it carries on after a restart. In this mode it digs and places blocks, and it never digs inside its own base.
+- **Survival mode.** The bot chops trees and crafts planks, sticks and a crafting table. It makes a wooden pickaxe, then mines stone for a stone pickaxe, sword and axe. It places a chest and builds a 5×5 hut with a door and roof at its base, makes a bed from sheep wool and sets its respawn there, adds a torch if it finds coal, stores loot in the chest and hunts animals when hungry. It works step by step from its inventory, so it carries on after a restart. In this mode it digs and places blocks, and it never digs inside its own base.
+- **Basic Minecraft sense.**
+  - Remembers where it died, even across a restart, and goes back for its items before they despawn.
+  - Uses the bed at its base as its respawn point.
+  - Always backs away from creepers.
+  - Stays home at night.
+  - Rests when badly hurt.
+  - Eats the best food it has and skips rotten flesh, raw chicken and spider eyes unless starving.
 - **Per-bot settings.** Every behaviour setting can be changed for one bot only in its Settings tab. Other bots keep the defaults.
 - **On-join commands and auto-message.** Commands to run after joining, such as `/login password` for login plugins, and a message to repeat every N minutes.
 - **Lifetime stats.** Time online, joins, distance walked, kills, deaths, items picked up, blocks mined and placed, crops harvested and items crafted.

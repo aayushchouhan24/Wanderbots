@@ -79,7 +79,12 @@ export function start(id) {
       const loop = () => { const c = cfgOf(id); if (c) think(b, st, c).catch(() => { st.busy = false }); brain = setTimeout(loop, rnd(600, 1500)) }
       loop()
     })
-    b.on('death', () => { b.pathfinder?.stop(); st.busy = false; st.count('deaths') })
+    b.on('death', () => {
+      b.pathfinder?.stop(); st.busy = false; st.recovering = false; st.count('deaths')
+      // remember where it died (saved, so it survives a restart) to go back for the items
+      const p = b.entity?.position, c = cfgOf(id)
+      if (p && c) { c.lastDeath = { x: Math.round(p.x), y: Math.round(p.y), z: Math.round(p.z), dim: b.game?.dimension, t: Date.now() }; save(); log(st, 'event', `died at ${c.lastDeath.x} ${c.lastDeath.y} ${c.lastDeath.z}`) }
+    })
     b.on('entityDead', en => { if (en.id === st.target) st.count('kills') })
     b.on('playerCollect', (who, item) => { if (who === b.entity) st.count('picked') })
     b.on('wake', () => { st.task = 'woke up' })
@@ -134,6 +139,8 @@ export function stats() {
         inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count, s: i.slot })) : [],
         stats: { ...(c.stats || {}), online: (c.stats?.online || 0) + (st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0) },
         own: c.set || {}, onJoin: c.onJoin || '', autoMsg: c.autoMsg || null,
+        spawnBed: c.spawnBed || null, lastDeath: c.lastDeath ? { ...c.lastDeath, ago: Math.round((Date.now() - c.lastDeath.t) / 1000) } : null,
+        worldSpawn: b?.spawnPoint ? [b.spawnPoint.x, b.spawnPoint.y, b.spawnPoint.z] : null,
         hand: b?.heldItem?.displayName,
         log: st.log || [],
       }

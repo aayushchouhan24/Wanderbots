@@ -68,13 +68,13 @@ const draft={},tabs=JSON.parse(localStorage.tabs||'{}')
 const MODES={roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',farm:'Farm…',survive:'Survival',idle:'Idle (AFK)'}
 const MODE_HELP={roam:'Wanders around wherever it is.',stay:'Hangs around a place and walks back if it drifts away.',follow:'Follows a player. With "fight", it also protects them from mobs.',
  guard:'Stays at a spot and fights any hostile mob within the guard radius.',farm:'Harvests ripe wheat, carrots, potatoes and beetroot around a place and replants them.',
- survive:'Plays survival: chops wood, crafts tools, mines stone, places a chest and builds a small hut at its base, stores loot, hunts when hungry. It digs and places blocks.',
+ survive:'Plays survival: chops wood, crafts tools, mines stone, places a chest, builds a small hut at its base, makes a bed from sheep wool and sets its respawn there, stores loot, hunts when hungry and stays inside at night. It digs and places blocks.',
  idle:'Stands still and looks around (AFK).'}
 const PLACE_MODES=['stay','guard','farm','survive']
 const F=[['combat','Hostile mobs','sel',{flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
  ['farmR','Farm radius','num'],['reconnect','Reconnect delay (s)','num'],['view','View distance','sel',{tiny:'tiny',short:'short',normal:'normal'}],
  ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['gear','Wear best armor & weapon','chk'],['pickup','Pick up items','chk'],
- ['sleep','Sleep in beds at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
+ ['sleep','Sleep in beds at night','chk'],['recover','Get items back after dying','chk'],['setSpawn','Set respawn at base bed','chk'],['nightHome','Stay home at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
  ['greet','Greet players who join','chk'],['owners','Owners (chat commands)','txt']]
 const STATS=[['online','online',s=>fmt(s)],['joins','joins'],['walked','walked',m=>Math.round(m)+' m'],['kills','kills'],['deaths','deaths'],['picked','items picked'],
  ['mined','blocks mined'],['harvested','crops harvested'],['crafted','crafted'],['placed','blocks placed'],['stored','chest trips'],['msgs','auto-messages']]
@@ -114,6 +114,10 @@ function paneOverview(b){const st=b.stats||{}
  return `<div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>level</b>${b.xp??'–'}</div>
   <div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div><div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>time</b>${b.day||'–'}</div>
   <div><b>holding</b>${esc(b.hand||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>session</b>${b.up?fmt(b.up):'–'}</div></div>
+  <h3 style="margin-top:14px">Respawn &amp; death</h3><div class="grid">
+   <div><b>respawn point</b>${b.spawnBed?'bed at '+esc(b.spawnBed.replace(/,/g,' ')):'world spawn'+(b.worldSpawn?' ('+b.worldSpawn.join(' ')+')':'')}</div>
+   <div><b>last death</b>${b.lastDeath?esc(b.lastDeath.x+' '+b.lastDeath.y+' '+b.lastDeath.z)+' · '+fmt(b.lastDeath.ago)+' ago':'–'}</div>
+   <div><b>items</b>${b.lastDeath?(b.lastDeath.ago<270?'going back for them':'despawned'):'–'}</div></div>
   <h3 style="margin-top:14px">Lifetime</h3><div class="grid">${STATS.map(([k,l,f])=>`<div><b>${l}</b>${st[k]!=null?(f?f(st[k]):st[k]):'0'}</div>`).join('')}</div>
   <h3 style="margin-top:14px">Players online (${b.players.length})</h3><div class="chips">${b.players.map(n=>`<span class="chip">${esc(n)}${b.nearby.includes(n)?' · near':''}</span>`).join('')||'<span class="dim sm">none</span>'}</div>`}
 
