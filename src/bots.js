@@ -138,6 +138,7 @@ export function stats() {
         players, nearby: b ? players.filter(n => b.players[n]?.entity && b.players[n].entity.position.distanceTo(e.position) < 32) : [],
         inv: b ? b.inventory.items().map(i => ({ n: i.displayName || i.name, c: i.count, s: i.slot })) : [],
         stats: { ...(c.stats || {}), online: (c.stats?.online || 0) + (st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0) },
+        aiNotes: st.aiNotes || '', aiHistory: (st.aiHistory || []).slice(-8), aiPaused: st.aiPaused || '',
         own: c.set || {}, onJoin: c.onJoin || '', autoMsg: c.autoMsg || null,
         spawnBed: c.spawnBed || null, lastDeath: c.lastDeath ? { ...c.lastDeath, ago: Math.round((Date.now() - c.lastDeath.t) / 1000) } : null,
         worldSpawn: b?.spawnPoint ? [b.spawnPoint.x, b.spawnPoint.y, b.spawnPoint.z] : null,

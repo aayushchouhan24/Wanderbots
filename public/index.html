@@ -72,19 +72,19 @@ button.g{background:none;border-color:transparent;color:var(--dim)}button.g:hove
 const $=id=>document.getElementById(id),v=id=>$(id).value.trim(),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')
 let tok=localStorage.t||'',S,setDrawn=0,editing=''
 const draft={},tabs=JSON.parse(localStorage.tabs||'{}')
-const MODES={auto:'Auto (plays by itself)',roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',farm:'Farm…',survive:'Survival',idle:'Idle (AFK)'}
-const MODE_HELP={auto:'Decides by itself what to do, like a player: builds up its base, farms, explores, hangs out with players nearby, relaxes. Goes home at night. Pick its base below.',roam:'Wanders around wherever it is.',stay:'Hangs around a place and walks back if it drifts away.',follow:'Follows a player. With "fight", it also protects them from mobs.',
+const MODES={ai:'AI plays (Claude)',auto:'Auto (rules, no AI)',roam:'Roam',stay:'Stay at…',follow:'Follow…',guard:'Guard…',farm:'Farm…',survive:'Survival',idle:'Idle (AFK)'}
+const MODE_HELP={ai:'Claude decides every step: it sees health, inventory, nearby resources, mobs and players, picks an action (gather, craft, smelt, build, explore, hunt, fight, sleep, store, chat…), learns from what failed, and works towards the goal in Settings. Reflexes (eat, flee creepers, fight back, recover items) stay automatic. Uses AI chat settings; capped per hour.',auto:'Decides by itself what to do, like a player: builds up its base, farms, explores, hangs out with players nearby, relaxes. Goes home at night. Pick its base below.',roam:'Wanders around wherever it is.',stay:'Hangs around a place and walks back if it drifts away.',follow:'Follows a player. With "fight", it also protects them from mobs.',
  guard:'Stays at a spot and fights any hostile mob within the guard radius.',farm:'Harvests ripe wheat, carrots, potatoes and beetroot around a place and replants them.',
  survive:'Plays survival: chops wood, crafts tools, mines stone, places a chest, builds a small hut at its base, makes a bed from sheep wool and sets its respawn there, stores loot, hunts when hungry and stays inside at night. It digs and places blocks.',
  idle:'Stands still and looks around (AFK).'}
-const PLACE_MODES=['stay','guard','farm','survive','auto']
+const PLACE_MODES=['stay','guard','farm','survive','auto','ai']
 const F=[['combat','Hostile mobs','sel',{flee:'run away',fight:'fight',ignore:'ignore'}],['guardR','Guard radius','num'],['roam','Roam radius','num'],['homeR','Stay radius at a place','num'],
  ['farmR','Farm radius','num'],['reconnect','Reconnect delay (s)','num'],['view','View distance','sel',{tiny:'tiny',short:'short',normal:'normal'}],
  ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['gear','Wear best armor & weapon','chk'],['pickup','Pick up items','chk'],
  ['sleep','Sleep in beds at night','chk'],['recover','Get items back after dying','chk'],['setSpawn','Set respawn at base bed','chk'],['nightHome','Stay home at night','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk'],['replies','Reply when named in chat','chk'],
- ['greet','Greet players who join','chk'],['ai','AI chat (Claude Haiku)','chk'],['aiMax','AI replies per hour (max)','num',500],['persona','AI personality','txt','e.g. chill builder who loves farming'],['owners','Owners (chat commands)','txt','e.g. Steve, Alex']]
+ ['greet','Greet players who join','chk'],['goal','AI goal (AI plays mode)','txt','e.g. get full iron armor and build a house'],['aiThinkMax','AI decisions per hour (max)','num',500],['ai','AI chat (Claude Haiku)','chk'],['aiMax','AI replies per hour (max)','num',500],['persona','AI personality','txt','e.g. chill builder who loves farming'],['owners','Owners (chat commands)','txt','e.g. Steve, Alex']]
 const STATS=[['online','online',s=>fmt(s)],['joins','joins'],['walked','walked',m=>Math.round(m)+' m'],['kills','kills'],['deaths','deaths'],['picked','items picked'],
- ['mined','blocks mined'],['aiReplies','AI replies'],['harvested','crops harvested'],['crafted','crafted'],['placed','blocks placed'],['stored','chest trips'],['msgs','auto-messages']]
+ ['mined','blocks mined'],['aiReplies','AI replies'],['aiThinks','AI decisions'],['harvested','crops harvested'],['crafted','crafted'],['placed','blocks placed'],['stored','chest trips'],['msgs','auto-messages']]
 const srvOf=b=>b.host+':'+b.port
 function show(ok){$('login').hidden=ok;$('app').hidden=!ok}
 async function api(p,b,m){const r=await fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:{'x-token':tok,'content-type':'application/json'},body:b&&JSON.stringify(b)})
@@ -125,6 +125,9 @@ function paneOverview(b){const st=b.stats||{}
  return `<div class="grid"><div><b>health</b>${b.hp!=null?Math.round(b.hp)+'/20':'–'}</div><div><b>food</b>${b.food??'–'}</div><div><b>level</b>${b.xp??'–'}</div>
   <div><b>pos</b>${b.pos?b.pos.join(' '):'–'}</div><div><b>world</b>${esc(b.dim?.replace('minecraft:','')||'–')}</div><div><b>time</b>${b.day||'–'}</div>
   <div><b>holding</b>${esc(b.hand||'–')}</div><div><b>ping</b>${b.ping!=null?b.ping+'ms':'–'}</div><div><b>session</b>${b.up?fmt(b.up):'–'}</div></div>
+  ${b.mode=='ai'?`<h3 style="margin-top:14px">AI${b.aiPaused?' · <span style="color:var(--warn)">'+esc(b.aiPaused)+', using the routine</span>':''}</h3>
+   <div class="sm">${b.aiNotes?'<b class="dim">plan:</b> '+esc(b.aiNotes):'<span class="dim">no plan notes yet</span>'}</div>
+   <div class="log" style="margin-top:6px;max-height:160px">${b.aiHistory.map(h=>`<div class="${/-> failed/.test(' -> '+h.result)||/^failed/.test(h.result)?'l-event':''}">${esc(h.action)} → ${esc(h.result)}</div>`).join('')||'<span class="dim">no decisions yet</span>'}</div>`:''}
   <h3 style="margin-top:14px">Respawn &amp; death</h3><div class="grid">
    <div><b>respawn point</b>${b.spawnBed?'bed at '+esc(b.spawnBed.replace(/,/g,' ')):'world spawn'+(b.worldSpawn?' ('+b.worldSpawn.join(' ')+')':'')}</div>
    <div><b>last death</b>${b.lastDeath?esc(b.lastDeath.x+' '+b.lastDeath.y+' '+b.lastDeath.z)+' · '+fmt(b.lastDeath.ago)+' ago':'–'}</div>

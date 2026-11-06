@@ -39,10 +39,26 @@ Stay in character as a player. If someone sincerely asks whether you are a bot o
 Never share passwords, coordinates of other players' bases, or anything that would help someone grief or cheat.
 If someone asks you to do something, you can say yes or no in character, but you cannot run commands from chat yourself.`
 
+// one Messages API call with the configured provider; on Bedrock without a chosen model,
+// falls back from Haiku 5.5 to Haiku 4.5 when the account doesn't have 5.5 enabled
+export async function aiCall(params) {
+  const ai = await getClient()
+  if (!ai) throw new Error('AI is not set up (pick Bedrock or add an Anthropic key in the panel)')
+  const { provider, region } = aiConfig()
+  const models = S.ai?.model ? [S.ai.model] : working ? [working] : provider === 'bedrock' ? bedrockModels(region) : ['claude-haiku-5-5']
+  let lastErr
+  for (const model of models) {
+    try {
+      const res = await ai.messages.create({ model, ...params, ...(/haiku-4-5/.test(model) ? {} : { output_config: { effort: 'low' } }) }) // Haiku 4.5 has no effort setting
+      working = model; return res
+    } catch (err) { lastErr = err; if (err.status !== 403 && err.status !== 404) throw err } // not enabled here: try the next
+  }
+  throw lastErr
+}
+
 // returns a reply string, or null if nothing should be said
 export async function aiReply(b, st, cfg, user, message, persona) {
-  const ai = await getClient()
-  if (!ai) return null
+  if (!aiReady()) return null
   const e = b.entity
   const recent = (st.log || []).filter(l => l.type === 'chat' || l.type === 'me').slice(-12)
     .map(l => (l.type === 'me' ? `<${b.username}> ` : '') + l.text).join('\n')
@@ -52,19 +68,7 @@ export async function aiReply(b, st, cfg, user, message, persona) {
     `Players online: ${Object.keys(b.players).filter(n => n !== b.username).join(', ') || 'nobody else'}.`
   const content = `${status}\n\nRecent chat:\n${recent || '(none)'}\n\n${user} just said: ${message}\n\nReply with your one chat line only.`
 
-  const { provider, region } = aiConfig()
-  const models = S.ai?.model ? [S.ai.model] : working ? [working] : provider === 'bedrock' ? bedrockModels(region) : ['claude-haiku-5-5']
-  let res, lastErr
-  for (const model of models) {
-    try {
-      res = await ai.messages.create({
-        model, max_tokens: 300, system: SYSTEM, messages: [{ role: 'user', content }],
-        ...(/haiku-4-5/.test(model) ? {} : { output_config: { effort: 'low' } }), // Haiku 4.5 has no effort setting
-      })
-      working = model; break
-    } catch (err) { lastErr = err; if (err.status !== 403 && err.status !== 404) throw err } // not enabled here: try the next
-  }
-  if (!res) throw lastErr
+  const res = await aiCall({ max_tokens: 300, system: SYSTEM, messages: [{ role: 'user', content }] })
   if (res.stop_reason === 'refusal') return null
   const text = res.content.filter(x => x.type === 'text').map(x => x.text).join(' ').replace(/\s+/g, ' ').trim()
   return text ? text.replace(/^<[^>]+>\s*/, '').slice(0, 200) : null

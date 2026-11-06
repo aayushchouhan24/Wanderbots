@@ -17,7 +17,8 @@ const short = n => String(n || '').trim().slice(0, 32)
 // coerce a shared setting to its allowed type/range
 function clean(k, v) {
   if (typeof DEFAULTS[k] === 'boolean') return !!v
-  if (k === 'aiMax') return Math.max(0, Math.min(500, Math.round(+v || 0)))
+  if (k === 'aiMax' || k === 'aiThinkMax') return Math.max(0, Math.min(500, Math.round(+v || 0)))
+  if (k === 'goal') return String(v || '').trim().slice(0, 300)
   if (typeof DEFAULTS[k] === 'number') return Math.max(0, Math.min(64, +v || 0))
   if (k === 'view') return ['tiny', 'short', 'normal'].includes(v) ? v : 'tiny'
   if (k === 'combat') return ['flee', 'fight', 'ignore'].includes(v) ? v : 'flee'

@@ -28,11 +28,11 @@ for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
 ROOF.sort((a, b) => Math.max(Math.abs(b[0]), Math.abs(b[2])) - Math.max(Math.abs(a[0]), Math.abs(a[2]))) // outside in, so each has a neighbour to stick to
 const SHELTER = [...RING, ...ROOF]
 
-const count = (b, test) => b.inventory.items().filter(i => typeof test === 'string' ? i.name === test : test.test(i.name)).reduce((n, i) => n + i.count, 0)
-const has = (b, name) => count(b, name) > 0
+export const count = (b, test) => b.inventory.items().filter(i => typeof test === 'string' ? i.name === test : test.test(i.name)).reduce((n, i) => n + i.count, 0)
+export const has = (b, name) => count(b, name) > 0
 const id = (b, name) => b.registry.itemsByName[name]?.id
 const at = (base, [dx, dy, dz]) => new Vec3(base.x + dx, base.y + dy, base.z + dz)
-const air = bl => !bl || bl.name === 'air' || bl.name === 'cave_air' || bl.boundingBox === 'empty'
+export const air = bl => !bl || bl.name === 'air' || bl.name === 'cave_air' || bl.boundingBox === 'empty'
 
 // survival movements: may dig and pillar, but never inside its own base or through chests/tables
 export function survivalMoves(b, base) {
@@ -43,14 +43,14 @@ export function survivalMoves(b, base) {
   return m
 }
 
-async function equipFor(b, block) {
+export async function equipFor(b, block) {
   const best = { pickaxe: /_pickaxe$/, axe: /_axe$/, shovel: /_shovel$/ }
   const want = /_log$|planks|wood/.test(block.name) ? 'axe' : /dirt|grass|sand|gravel/.test(block.name) ? 'shovel' : 'pickaxe'
   const tools = b.inventory.items().filter(i => best[want].test(i.name)).sort((x, y) => (y.name.startsWith('stone') ? 2 : 1) - (x.name.startsWith('stone') ? 2 : 1))
   if (tools[0]) await b.equip(tools[0], 'hand')
 }
 
-async function collectNear(b, pos) {
+export async function collectNear(b, pos) {
   await wait(350)
   for (let i = 0; i < 3; i++) {
     const it = b.nearestEntity(x => x.name === 'item' && x.position.distanceTo(pos) < 5)
@@ -61,7 +61,7 @@ async function collectNear(b, pos) {
 }
 
 // dig the nearest block matching `test`, walk over its drops
-async function gather(b, st, test, what) {
+export async function gather(b, st, test, what) {
   const bl = b.findBlock({ matching: x => test(x.name), maxDistance: 40 })
   if (!bl) { st.task = `survival: no ${what} nearby, exploring`; await explore(b); return }
   await goto(b, new goals.GoalLookAtBlock(bl.position, b.world, { reach: 4 }))
@@ -76,7 +76,7 @@ async function explore(b) {
   await goto(b, new goals.GoalNearXZ(p.x + Math.cos(a) * 30, p.z + Math.sin(a) * 30, 3)).catch(() => {})
 }
 
-async function planks(b, n) {
+export async function planks(b, n) {
   while (count(b, /_planks$/) < n && count(b, /_log$/) > 0) {
     const log = b.inventory.items().find(i => /_log$/.test(i.name))
     const r = b.recipesFor(id(b, log.name.replace(/^stripped_/, '').replace(/_log$/, '_planks')), null, 1, null)[0]
@@ -85,7 +85,7 @@ async function planks(b, n) {
   }
 }
 
-async function craft(b, st, name, n = 1, base) {
+export async function craft(b, st, name, n = 1, base) {
   const item = id(b, name); if (!item) return false
   let table = null
   let r = b.recipesFor(item, null, 1, null)[0]
@@ -101,7 +101,7 @@ async function craft(b, st, name, n = 1, base) {
 }
 
 // place an item from the inventory at a target position (needs a solid neighbour)
-async function placeAt(b, name, pos) {
+export async function placeAt(b, name, pos) {
   if (!air(b.blockAt(pos))) return true
   const item = b.inventory.items().find(i => typeof name === 'string' ? i.name === name : name.test(i.name))
   if (!item) return false
@@ -132,7 +132,7 @@ async function placeInBase(b, name, home, pref) {
 const nearBase = (b, base, blockName) => b.findBlock({ point: new Vec3(base.x, base.y, base.z), matching: b.registry.blocksByName[blockName]?.id ?? -1, maxDistance: 6 })
 
 // chase and kill an animal, then pick up what it dropped
-async function hunt(b, st, prey) {
+export async function hunt(b, st, prey) {
   const weapon = b.inventory.items().find(i => /_sword$|_axe$/.test(i.name)); if (weapon) await b.equip(weapon, 'hand')
   for (let i = 0; i < 20 && prey.isValid; i++) {
     if (prey.position.distanceTo(b.entity.position) > 3) await goto(b, new goals.GoalFollow(prey, 2), 6000).catch(() => {})

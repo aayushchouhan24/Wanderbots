@@ -19,6 +19,8 @@ export const DEFAULTS = {
   ai: false,          // answer chat with Claude Haiku (needs an API key in the panel)
   persona: '',        // short personality for AI chat, e.g. "chill builder who loves farming"
   aiMax: 30,          // max AI replies per bot per hour (cost cap)
+  goal: '',           // what the bot works towards in "AI plays" mode
+  aiThinkMax: 60,     // max AI decisions per bot per hour in "AI plays" mode (cost cap)
   reconnect: 10, view: 'tiny',
 }
 

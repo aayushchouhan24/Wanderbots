@@ -4,6 +4,7 @@ import pf from 'mineflayer-pathfinder'
 import { Vec3 } from 'vec3'
 import { S, eff, save } from './store.js'
 import { survive, goto } from './survival.js'
+import { aiPlayStep } from './aiplay.js'
 
 const { goals } = pf
 export const rnd = (a, b) => a + Math.random() * (b - a)
@@ -11,7 +12,7 @@ const chance = p => Math.random() < p
 const near = (b, x, r) => x.position.distanceTo(b.entity.position) < r
 
 // modes a bot can be in (stored per bot)
-export const MODES = ['auto', 'roam', 'stay', 'follow', 'guard', 'farm', 'survive', 'idle']
+export const MODES = ['ai', 'auto', 'roam', 'stay', 'follow', 'guard', 'farm', 'survive', 'idle']
 
 // ---- gear: best weapon and armor by material
 const TIER = ['wooden', 'golden', 'stone', 'copper', 'iron', 'diamond', 'netherite']
@@ -95,6 +96,11 @@ function pickActivity(b, st, c, home) {
 
 export async function think(b, st, cfg) {
   const e = b.entity, c = eff(cfg)
+  // while the AI's action runs, a mob right next to us interrupts it so the reflexes below can react
+  if (e && st.busy && st.aiRunning && c.combat !== 'ignore') {
+    const danger = b.nearestEntity(x => x.type === 'hostile' && x.position.distanceTo(e.position) < (x.name === 'creeper' ? 7 : 5))
+    if (danger && !st.abort) { st.abort = true; b.pathfinder.stop(); try { b.stopDigging() } catch {} }
+  }
   if (!e || st.busy || b.isSleeping) return
   const mode = cfg.mode || 'roam', home = homeOf(cfg)
   const run = async (task, fn) => { st.busy = true; st.task = task; try { await fn() } catch {} st.busy = false }
@@ -211,7 +217,7 @@ export async function think(b, st, cfg) {
     if (!home) { const p = e.position.floored(); cfg.spot = { x: p.x, y: p.y, z: p.z, label: 'base' }; save(); return }
     m = pickActivity(b, st, c, home)
   }
-  if (m !== 'survive' && st.survMoves) { st.survMoves = false; st.moves?.() } // back to no-dig walking
+  if (m !== 'survive' && m !== 'ai' && st.survMoves) { st.survMoves = false; st.moves?.() } // back to no-dig walking
   const player = c.lookPlayers && b.nearestEntity(x => x.type === 'player' && near(b, x, 8))
   if (player && chance(0.6)) b.lookAt(player.position.offset(0, 1.6, 0))
 
@@ -247,6 +253,14 @@ export async function think(b, st, cfg) {
     const hasSeed = b.inventory.items().some(i => Object.values(CROPS).some(x => x[1] === i.name))
     if (soil && hasSeed) return run('planting', () => plant(b, soil, null))
     if (mode === 'auto') st.auto.done = true // nothing to do on the farm right now
+  }
+
+  if (m === 'ai') { // Claude decides; if the AI is unavailable or at its hourly limit, keep playing with the routine
+    st.busy = true; let ok = false
+    try { ok = await aiPlayStep(b, st, cfg, c, home) } catch (err) { st.log?.push({ t: Date.now(), type: 'event', text: 'AI step error: ' + String(err.message || err).slice(0, 120) }) }
+    st.busy = false
+    if (ok) return
+    m = 'survive'
   }
 
   if (m === 'survive' && Date.now() > (st.survIdle || 0)) {
