@@ -42,7 +42,7 @@ input{width:130px}.w-host{width:300px}.w-port{width:80px}.w-xyz{width:70px}butto
 const $=id=>document.getElementById(id),v=id=>$(id).value.trim(),esc=s=>String(s??'').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')
 let tok=localStorage.t||'',S,setDrawn=0,editing=''
 const F=[['view','View distance','view'],['roam','Roam radius (blocks)','num'],['homeR','Stay radius at a place','num'],['reconnect','Reconnect delay (s)','num'],
- ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk']]
+ ['lookPlayers','Look at nearby players','chk'],['eat','Eat when hungry','chk'],['flee','Run from hostile mobs','chk'],['fidget','Jump / sneak / swing','chk'],['sprint','Sprint when walking','chk']]
 const srvOf=b=>b.host+':'+b.port
 function show(ok){$('login').hidden=ok;$('app').hidden=!ok}
 async function api(p,b,m){const r=await fetch('/api/'+p,{method:m||(b?'POST':'GET'),headers:{'x-token':tok,'content-type':'application/json'},body:b&&JSON.stringify(b)})
@@ -64,7 +64,7 @@ function fmt(s){return s>3600?(s/3600|0)+'h'+((s%3600)/60|0)+'m':s>60?(s/60|0)+'
 function card(b){const c=b.up?'var(--ok)':b.task=='offline'?'var(--bad)':'var(--warn)',i=b.id,srv=srvOf(b)
  const places=S.places.filter(p=>p.server==srv).map(p=>`<option value="${p.id}" ${p.id==b.at?'selected':''}>${esc(p.name)}</option>`).join('')
  const place=S.places.find(p=>p.id==b.at)
- const info=[b.server||'not reached',b.using&&'using '+b.using+(b.version=='auto'?' (auto)':''),b.online!=null&&b.online+'/'+b.max+' online',b.motd].filter(Boolean).map(esc).join(' · ')
+ const info=[b.server||'not reached',b.using&&'using '+b.using+(b.version=='auto'?' (auto)':'')+(b.via?' via ViaProxy':''),b.online!=null&&b.online+'/'+b.max+' online',b.motd].filter(Boolean).map(esc).join(' · ')
  return `<div class="card"><div class="row"><span class="dot" style="background:${c}"></span><b>${esc(b.name)}</b><span class="dim">${esc(b.task)}</span><span class="sp"></span>
   <select id="s_${i}"><option value="">send to…</option>${places}</select><button onclick="send('${i}')">Go</button>
   <button onclick="api('bots/${i}/roam',{})">Roam</button><button onclick="here('${i}')">Save spot</button>

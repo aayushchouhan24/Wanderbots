@@ -4,6 +4,8 @@ import pf from 'mineflayer-pathfinder'
 import { S, serverKey } from './store.js'
 import { detect, text, servers } from './version.js'
 import { think, rnd } from './brain.js'
+import { tickEnd } from './fixes.js'
+import * as via from './viaproxy.js'
 
 const { pathfinder, Movements, goals } = pf
 export const live = new Map() // bot id -> runtime state
@@ -23,13 +25,22 @@ export function start(id) {
       st.err = 'cannot reach server: ' + (e.message || e.code || 'no reply'); st.task = 'offline'; st.timer = setTimeout(run, 15000); return
     }
     st.version = version
+    // server newer than mineflayer supports -> go through the local ViaProxy
     const srv = servers.get(serverKey(cfg.host, cfg.port))
-    if (srv?.unsupported && cfg.version === 'auto') { // don't hammer a server we can't speak to
-      st.task = 'unsupported'; st.err = `server runs ${srv.server}, newest supported is ${srv.newest}. It needs ViaVersion/ViaBackwards on the server, or a ViaProxy.`
-      st.timer = setTimeout(run, 60000); return
+    let conn = { host: cfg.host, port: cfg.port }
+    st.via = false
+    if (srv?.unsupported && cfg.version === 'auto') {
+      try { await via.ensure() } catch (e) {
+        st.task = 'unsupported'; st.err = `server runs ${srv.server}, newest direct version is ${srv.newest}, and ViaProxy failed: ${e.message}`
+        st.timer = setTimeout(run, 60000); return
+      }
+      if (st.stop) return
+      conn = { host: via.VIA.host, port: via.VIA.port, fakeHost: via.route(cfg.host, cfg.port, srv.target) }
+      st.via = true
     }
-    const b = mineflayer.createBot({ host: cfg.host, port: cfg.port, username: cfg.name, version, auth: 'offline', viewDistance: S.set.view, hideErrors: true })
+    const b = mineflayer.createBot({ ...conn, username: cfg.name, version, auth: 'offline', viewDistance: S.set.view, hideErrors: true })
     st.bot = b; st.task = 'joining'
+    tickEnd(b, version)
     b.loadPlugin(pathfinder)
     let brain
 
@@ -76,7 +87,7 @@ export function stats() {
       const st = live.get(c.id) || {}, b = st.bot, e = b?.entity, srv = servers.get(serverKey(c.host, c.port)) || {}
       return {
         id: c.id, name: c.name, host: c.host, port: c.port, version: c.version, at: c.at,
-        using: st.version, server: srv.server, motd: srv.motd, online: srv.online, max: srv.max,
+        using: st.version, via: st.via, server: srv.server, motd: srv.motd, online: srv.online, max: srv.max,
         task: st.task, err: st.err, up: st.joined ? Math.round((Date.now() - st.joined) / 1000) : 0,
         hp: b?.health, food: b?.food, ping: b?.player?.ping, dim: b?.game?.dimension,
         pos: e ? [e.position.x, e.position.y, e.position.z].map(Math.round) : null,

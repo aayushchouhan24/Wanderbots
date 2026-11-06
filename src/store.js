@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import crypto from 'node:crypto'
 
 // default bot behaviour (shared by all bots); editable from the panel
-export const DEFAULTS = { roam: 15, homeR: 6, lookPlayers: true, eat: true, fidget: true, sprint: false, reconnect: 10, view: 'tiny' }
+export const DEFAULTS = { roam: 15, homeR: 6, lookPlayers: true, eat: true, flee: true, fidget: true, sprint: false, reconnect: 10, view: 'tiny' }
 
 export const S = {
   bots: [],    // [{ id, name, host, port, version, at? }]   at = place id

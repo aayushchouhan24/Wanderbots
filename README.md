@@ -7,8 +7,8 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 ## Features
 
 - **Any username, any server.** Add as many bots as you want. Each one has its own username, server (paste `host:port`) and version, all set in the panel.
-- **Automatic version.** Each bot pings its server and joins with the matching Minecraft version (1.8.8 to 26.1). You can also pick a version per bot.
-- **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak, swing and eat. They never break or place blocks.
+- **Any version.** Each bot pings its server and joins with the matching version. Versions 1.8.8 to 26.1 connect directly. Newer servers (26.2, 26.3, …) go through a built-in [ViaProxy](https://github.com/ViaVersion/ViaProxy), started automatically only when needed.
+- **Real-player behaviour.** Bots wander, glance around, watch nearby players, jump, sneak, swing, eat and run from hostile mobs. They never break or place blocks.
 - **Places.** Save spots like `farm` or `base` for a server, by coordinates or from where a bot stands, and send that server's bots there. A bot stays near its place and walks back after dying.
 - **Live stats.** Health, food, position, world, ping, uptime and players online.
 - **Everything editable in the panel.** Per bot: username, server, port and version. For all bots: roam radius, stay radius, view distance, reconnect delay and behaviour toggles.
@@ -18,6 +18,7 @@ Built on [mineflayer](https://github.com/PrismarineJS/mineflayer). It uses littl
 ## Requirements
 
 - Node.js 22 or newer, or Docker
+- Java 17+ and `viaproxy/ViaProxy.jar`, only for servers newer than 26.1. The Docker image already includes both.
 - A Minecraft server in **offline mode** (`online-mode=false`). Bots don't have Mojang accounts.
 
 ## Quick start
@@ -27,6 +28,8 @@ git clone https://github.com/aayushchouhan24/Wanderbots.git
 cd Wanderbots
 npm install
 cp .env.example .env   # then edit .env
+# optional, for servers newer than 26.1:
+mkdir viaproxy && curl -L -o viaproxy/ViaProxy.jar https://github.com/ViaVersion/ViaProxy/releases/download/v3.4.14/ViaProxy-3.4.14.jar
 npm start
 ```
 
@@ -61,6 +64,8 @@ src/
   version.js   server ping and version detection
   bots.js      bot lifecycle per server: connect, reconnect, places, stats
   brain.js     "real player" behaviour, runs about once a second
+  fixes.js     protocol fixes (tick_end)
+  viaproxy.js  starts ViaProxy for servers newer than 26.1
   web.js       HTTP server and JSON API
 public/
   index.html   control panel (single file, no build step)
@@ -87,9 +92,14 @@ All routes except `login` need the `x-token` header returned by `POST /api/login
 | `POST`   | `/api/places`                | `{ name, server, x, y, z }` |
 | `DELETE` | `/api/places/:id`          |                         |
 
+## How newer servers work
+
+Mineflayer speaks up to 26.1. When a bot's server is newer, Wanderbots starts one local ViaProxy (`127.0.0.1:25568`, about 150–250 MB RAM) and the bot connects through it. The bot's handshake tells ViaProxy which server and version to use, so one ViaProxy serves every server.
+
+Wanderbots also sends the `tick_end` packet that real 1.21.2+ clients send after every tick. Without it, newer servers kick bots with "Invalid move player packet".
+
 ## Known limits
 
-- Servers newer than 26.1 aren't supported directly. The panel marks such bots as **unsupported** and won't keep retrying the login. A server with ViaVersion and ViaBackwards may accept bots, but can kick them for "invalid player movement". Otherwise run the server on 26.1 or wait for mineflayer to support the newer version.
 - Use bots only on servers you own or have permission to use.
 
 ## License

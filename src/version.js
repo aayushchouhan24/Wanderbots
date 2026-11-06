@@ -22,6 +22,7 @@ export async function detect(host, port, pref = 'auto') {
   const match = byProto.find(v => SUPPORTED.includes(v)) || SUPPORTED.find(v => name.includes(v))
   const auto = match || SUPPORTED.at(-1)
   const version = pref !== 'auto' && SUPPORTED.includes(pref) ? pref : auto
-  servers.set(serverKey(host, port), { auto, server: name, protocol: proto, online: r.players?.online, max: r.players?.max, motd: text(r.description).slice(0, 80), unsupported: !match, newest: SUPPORTED.at(-1), at: Date.now() })
+  servers.set(serverKey(host, port), { auto, server: name, protocol: proto, online: r.players?.online, max: r.players?.max, motd: text(r.description).slice(0, 80), unsupported: !match, newest: SUPPORTED.at(-1),
+    target: byProto[0] || name.match(/\d+\.\d+(\.\d+)?/)?.[0] || '', at: Date.now() }) // target = real server version, for ViaProxy
   return version
 }

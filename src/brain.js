@@ -16,6 +16,14 @@ export async function think(b, st) {
     if (food) { st.eating = true; try { await b.equip(food, 'hand'); await b.consume() } catch {} st.eating = false }
   }
 
+  // run away from hostile mobs (zombies, skeletons, creepers...)
+  const mob = c.flee && b.nearestEntity(x => x.type === 'hostile' && x.position.distanceTo(e.position) < 10)
+  if (mob) {
+    if (st.fleeing !== mob.id) { st.fleeing = mob.id; b.pathfinder.setGoal(new goals.GoalInvert(new goals.GoalFollow(mob, 16)), true) }
+    return
+  }
+  if (st.fleeing) { st.fleeing = null; b.pathfinder.stop() }
+
   // look at people nearby
   const p = c.lookPlayers && b.nearestEntity(x => x.type === 'player' && x.position.distanceTo(e.position) < 8)
   if (p && chance(0.6)) b.lookAt(p.position.offset(0, 1.6, 0))
