@@ -125,9 +125,15 @@ function makeModes() { return [
                 this.stuck_time = 0;
                 execute(this, agent, async () => {
                     const crashTimeout = setTimeout(() => { agent.cleanKill("Got stuck and couldn't get unstuck") }, 10000);
-                    await skills.moveAway(bot, 5);
-                    clearTimeout(crashTimeout);
-                    say(agent, 'I\'m free.');
+                    const cancelTimeout = () => clearTimeout(crashTimeout);
+                    bot.once('end', cancelTimeout);
+                    try {
+                        await skills.moveAway(bot, 5);
+                        if (agent.running && !bot.interrupt_code) say(agent, 'I\'m free.');
+                    } finally {
+                        cancelTimeout();
+                        bot.removeListener('end', cancelTimeout);
+                    }
                 });
             }
             this.last_time = Date.now();

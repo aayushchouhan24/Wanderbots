@@ -98,5 +98,14 @@ export class McAgent {
 
   clearBotLogs() { this.bot.output = ''; this.bot.interrupt_code = false }
 
+  // Disconnect only this bot; bots.js handles reconnecting it.
+  cleanKill(reason) {
+    if (!this.running) return
+    this.running = false
+    this.actions.cancelResume()
+    this.requestInterrupt()
+    this.bot.quit(reason)
+  }
+
   async stop() { this.running = false; await this.actions.stop(); this.clearBotLogs() } // also clears the interrupt flag for the other modes
 }
